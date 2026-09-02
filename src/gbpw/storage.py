@@ -1,0 +1,185 @@
+"""
+SQLite storage for GB Power Weekly. One file, gitignored, at data/gbpw.db.
+
+Schema:
+    prices(series, sd, sp, run, value, fetched_at)  PK (series, sd, sp, run)
+    fetch_log(series, sd, ok, note, ts)
+    reports(week_ending, facts_json, narrative, run_basis, built_at, published)
+
+Series stored in `prices`:
+    day_ahead        -- Elexon Market Index Data, GBP/MWh          (run='NA')
+    imbalance         -- Elexon settlement system price, GBP/MWh    (run=<see below>)
+    wind              -- wind generation, MW                       (run='NA')
+    total_generation  -- generation-type total (excl. interconnectors), MW (run='NA')
+    demand            -- Initial National Demand Outturn, MW        (run='NA')
+
+`run` is a real settlement-run identifier only for `imbalance`. Elexon's
+convenient system-prices endpoint never tells us which run a figure came
+from -- its own docs say it always returns "the latest available settlement
+run" -- so we store it under the sentinel run='latest'. Re-ingesting a period
+overwrites that row with whatever Elexon currently considers latest, which
+is exactly the "metrics take the latest available run per period" behaviour
+asked for, within the limits of what this endpoint exposes. See
+ingest/elexon.py for the longer note.
+
+Non-imbalance series don't have a run concept; they use the constant 'NA'
+so the primary key still applies uniformly.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "gbpw.db"
+
+NA_RUN = "NA"
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS prices (
+    series      TEXT NOT NULL,
+    sd          TEXT NOT NULL,
+    sp          INTEGER NOT NULL,
+    run         TEXT NOT NULL,
+    value       REAL NOT NULL,
+    fetched_at  TEXT NOT NULL,
+    PRIMARY KEY (series, sd, sp, run)
+);
+
+CREATE TABLE IF NOT EXISTS fetch_log (
+    series  TEXT NOT NULL,
+    sd      TEXT NOT NULL,
+    ok      INTEGER NOT NULL,
+    note    TEXT,
+    ts      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reports (
+    week_ending  TEXT PRIMARY KEY,
+    facts_json   TEXT NOT NULL,
+    narrative    TEXT,
+    run_basis    TEXT,
+    built_at     TEXT NOT NULL,
+    published    INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+
+@dataclass(frozen=True)
+class PriceRow:
+    series: str
+    sd: date
+    sp: int
+    run: str
+    value: float
+
+
+def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
+    db_path = Path(db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(SCHEMA)
+    return conn
+
+
+def upsert_prices(conn: sqlite3.Connection, rows: Iterable[PriceRow], fetched_at: datetime | None = None) -> int:
+    fetched_at = fetched_at or datetime.now(timezone.utc)
+    ts = fetched_at.isoformat()
+    data = [(r.series, r.sd.isoformat(), r.sp, r.run, r.value, ts) for r in rows]
+    conn.executemany(
+        """
+        INSERT INTO prices (series, sd, sp, run, value, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (series, sd, sp, run) DO UPDATE SET
+            value = excluded.value,
+            fetched_at = excluded.fetched_at
+        """,
+        data,
+    )
+    conn.commit()
+    return len(data)
+
+
+def log_fetch(conn: sqlite3.Connection, series: str, sd: date, ok: bool, note: str = "") -> None:
+    conn.execute(
+        "INSERT INTO fetch_log (series, sd, ok, note, ts) VALUES (?, ?, ?, ?, ?)",
+        (series, sd.isoformat(), int(ok), note, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+
+def series_for_week(
+    conn: sqlite3.Connection, series: str, week_dates: list[date], run: str | None = None
+) -> dict[tuple[str, int], float]:
+    """(sd_iso, sp) -> value for a series across a set of dates.
+
+    If `run` is None, returns the max-run row per (sd, sp) -- for series with
+    only NA_RUN that's a no-op; for `imbalance` there is currently only ever
+    one row per period (see module docstring) so this is also a no-op, but
+    the query is written to do the right thing if that ever changes.
+    """
+    sd_list = [d.isoformat() for d in week_dates]
+    placeholders = ",".join("?" for _ in sd_list)
+    query = f"""
+        SELECT sd, sp, value FROM prices
+        WHERE series = ? AND sd IN ({placeholders})
+        AND run = (
+            SELECT p2.run FROM prices p2
+            WHERE p2.series = prices.series AND p2.sd = prices.sd AND p2.sp = prices.sp
+            ORDER BY p2.run DESC LIMIT 1
+        )
+    """
+    rows = conn.execute(query, [series, *sd_list]).fetchall()
+    return {(sd, sp): value for sd, sp, value in rows}
+
+
+def upsert_report(
+    conn: sqlite3.Connection,
+    week_ending: date,
+    facts_json: str,
+    narrative: str,
+    run_basis: str,
+    built_at: datetime | None = None,
+    published: bool = False,
+) -> None:
+    built_at = built_at or datetime.now(timezone.utc)
+    conn.execute(
+        """
+        INSERT INTO reports (week_ending, facts_json, narrative, run_basis, built_at, published)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (week_ending) DO UPDATE SET
+            facts_json = excluded.facts_json,
+            narrative = excluded.narrative,
+            run_basis = excluded.run_basis,
+            built_at = excluded.built_at,
+            published = excluded.published
+        """,
+        (week_ending.isoformat(), facts_json, narrative, run_basis, built_at.isoformat(), int(published)),
+    )
+    conn.commit()
+
+
+def get_report(conn: sqlite3.Connection, week_ending: date) -> dict | None:
+    row = conn.execute(
+        "SELECT week_ending, facts_json, narrative, run_basis, built_at, published FROM reports WHERE week_ending = ?",
+        (week_ending.isoformat(),),
+    ).fetchone()
+    if row is None:
+        return None
+    keys = ("week_ending", "facts_json", "narrative", "run_basis", "built_at", "published")
+    report = dict(zip(keys, row))
+    report["published"] = bool(report["published"])
+    return report
+
+
+def mark_published(conn: sqlite3.Connection, week_ending: date, published: bool = True) -> bool:
+    """Returns False if no report row exists yet for that week (build it first)."""
+    cur = conn.execute(
+        "UPDATE reports SET published = ? WHERE week_ending = ?",
+        (int(published), week_ending.isoformat()),
+    )
+    conn.commit()
+    return cur.rowcount > 0
