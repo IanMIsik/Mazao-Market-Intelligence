@@ -13,6 +13,7 @@
     --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
   }
   * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
   body {
     margin:0; background:var(--paper); color:var(--ink);
     font-family:var(--sans); font-size:15px; line-height:1.55;
@@ -21,7 +22,6 @@
   .wrap { max-width:1060px; margin:0 auto; padding:0 28px 72px; }
   .num { font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1; }
 
-  /* app shell nav -- new: this is what makes the report "one page of an app" */
   .appnav { background:var(--navy); }
   .appnav .wrap { display:flex; align-items:center; gap:28px; padding:0 28px; max-width:1060px; }
   .appnav .brand { font-weight:700; color:#fff; letter-spacing:.01em; font-size:15px; padding:14px 0; }
@@ -35,11 +35,9 @@
     border-radius:8px; color:#8FA0BC; }
   .appnav a:not(.soon):not(.on):hover { color:#fff; }
 
-  /* header */
   header { display:flex; justify-content:space-between; align-items:baseline;
     gap:24px; flex-wrap:wrap; padding:26px 0 12px; border-bottom:3px solid var(--navy); }
   .brand2 { font-weight:700; color:var(--navy); letter-spacing:.01em; font-size:17px; }
-  .brand2 span { font-weight:400; color:var(--muted); }
   .stamp { color:var(--muted); font-size:13px; }
   .draft { margin:14px 0 0; padding:9px 14px; background:#FFF6E5;
     border-left:3px solid #C08A2E; font-size:13.5px; color:#6A5220; }
@@ -48,7 +46,6 @@
     font-size:26px; line-height:1.32; margin:26px 0 6px; max-width:34em; }
   .byline { color:var(--muted); font-size:13.5px; margin:0 0 22px; max-width:70ch; }
 
-  /* filters */
   .filters { border:1px solid var(--rule); background:var(--callout); padding:14px 18px 16px; margin:20px 0 0; }
   .filters .row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
   .filters .row + .row { margin-top:12px; }
@@ -61,13 +58,22 @@
   .chip.active { background:var(--navy); border-color:var(--navy); color:#fff; }
   .chip.active.svc-fh { background:var(--navy-mid); border-color:var(--navy-mid); }
   .chip.active.svc-r { background:var(--wind); border-color:var(--wind); }
-  .chip .n { opacity:.7; font-size:11.5px; margin-left:2px; }
   .filters .range { font-size:13px; color:var(--ink); }
   .filters .range button { font-size:12.5px; padding:5px 10px; border:1px solid var(--rule);
     background:var(--paper); border-radius:4px; margin-right:6px; cursor:pointer; }
   .filters .range button.on { background:var(--navy); color:#fff; border-color:var(--navy); }
 
-  /* kpis */
+  .search-wrap { display:flex; align-items:center; gap:10px; flex-wrap:wrap; flex:1 1 auto; }
+  .psearch { font-size:13.5px; padding:7px 10px; border:1px solid var(--rule); border-radius:4px; width:270px; }
+  .psearch:focus { outline:2px solid var(--navy-mid); outline-offset:1px; border-color:var(--navy-mid); }
+  .phint { font-size:12px; color:var(--muted); }
+  .pills { display:flex; gap:8px; flex-wrap:wrap; }
+  .pill { display:inline-flex; align-items:center; gap:2px; font-size:13px; padding:5px 4px 5px 12px;
+    background:var(--navy); color:#fff; border-radius:14px; }
+  .pill button { background:none; border:0; color:#B9C6DA; cursor:pointer; font-size:15px; line-height:1;
+    padding:3px 8px; }
+  .pill button:hover { color:#fff; }
+
   .kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:0;
     border-top:1px solid var(--rule); border-bottom:1px solid var(--rule); margin:22px 0 0; }
   .kpi { padding:16px 20px 15px; border-left:1px solid var(--rule-soft); }
@@ -78,13 +84,18 @@
   .kpi .ref { font-size:13px; color:var(--muted); }
 
   h2 { font-size:15px; color:var(--navy); margin:44px 0 4px; font-weight:700; }
+  h3 { font-size:13.5px; color:var(--navy); margin:26px 0 4px; font-weight:600; }
   .lede { color:var(--muted); font-size:13.5px; margin:0 0 14px; max-width:70ch; }
   .rule { border:0; border-top:1px solid var(--rule); margin:0; }
+  .section-note { font-size:12.5px; color:var(--muted); margin:8px 0 0; }
 
   svg { display:block; width:100%; height:auto; }
   .ax { font-family:var(--sans); font-size:12px; fill:var(--muted); font-variant-numeric:tabular-nums; }
+  .ax.sm { font-size:10.5px; }
   .eac-fl { fill:var(--navy); } .eac-fh { fill:var(--navy-mid); } .eac-r { fill:var(--wind); }
   .rankbar { fill:var(--signal); opacity:.85; }
+  .histbar { fill:var(--navy-mid); }
+  .axline { stroke:var(--rule); stroke-width:1; }
   .legend { display:flex; gap:20px; font-size:12.5px; color:var(--muted); margin:10px 0 0; }
   .swatch { display:inline-block; width:11px; height:11px; vertical-align:middle; margin-right:6px; border-radius:2px; }
   .legend span { margin-right:20px; }
@@ -101,7 +112,9 @@
   .svc-pill { font-size:11.5px; padding:2px 7px; border-radius:8px; color:#fff; display:inline-block; }
   .svc-pill.fl { background:var(--navy); } .svc-pill.fh { background:var(--navy-mid); } .svc-pill.r { background:var(--wind); }
 
-  .note-inline { font-size:12.5px; color:var(--muted); margin-top:8px; }
+  .empty-state { padding:26px 18px; border:1px dashed var(--rule); background:var(--callout);
+    color:var(--muted); font-size:13.5px; text-align:center; margin-top:14px; }
+  #selected-detail[hidden], #selected-empty[hidden] { display:none; }
 
   footer { margin-top:52px; padding-top:16px; border-top:1px solid var(--navy);
     font-size:12.5px; color:var(--muted); }
@@ -142,28 +155,31 @@
   <div class="stamp num">Data to Sun 30 Aug 2026 &middot; updated 31 Aug, 06:00 BST</div>
 </header>
 
-<p class="draft">Design sketch. Participant names, volumes, prices and revenue below are entirely
-synthetic, used only to show layout, filtering and density before this is wired to real data. Not
-one of these figures is real.</p>
+<p class="draft">Design sketch. All figures below, including the "2,314 participants" scale, are
+synthetic &mdash; used to test how the page behaves with a market-sized participant list rather than a
+handful. Not one of these numbers is real.</p>
 
 <h1>Battery participation across ancillary services and the Balancing Mechanism.</h1>
-<p class="byline">Enduring Auction Capability (EAC) clearing by participant and service, alongside
-Balancing Mechanism bids and offers accepted, normalised to &pound;/MW/day so sites of different sizes
-compare on equal terms.</p>
+<p class="byline">With thousands of participants tracked, the page opens on market-wide totals.
+Search for a participant below to add them and see their own EAC and Balancing Mechanism activity in detail.</p>
 
 <div class="filters">
   <div class="row">
     <div class="flabel">Participant</div>
-    <div class="chips" id="chips-participant">
-      <span class="chip active" data-p="V__BATT01">V__BATT01</span>
-      <span class="chip active" data-p="V__BATT02">V__BATT02</span>
-      <span class="chip active" data-p="T__BATT03">T__BATT03</span>
-      <span class="chip active" data-p="T__BATT04">T__BATT04</span>
-      <span class="chip active" data-p="V__BATT05">V__BATT05</span>
-      <span class="chip active" data-p="T__BATT06">T__BATT06</span>
-      <span class="chip active" data-p="V__BATT07">V__BATT07</span>
-      <span class="chip active" data-p="T__BATT08">T__BATT08</span>
+    <div class="search-wrap">
+      <input class="psearch" type="text" list="participant-datalist" id="psearch"
+        placeholder="Search by participant or BMU ID&hellip;" autocomplete="off">
+      <datalist id="participant-datalist">
+        <option value="V__BATT01"><option value="V__BATT02"><option value="T__BATT03">
+        <option value="T__BATT04"><option value="V__BATT05"><option value="T__BATT06">
+        <option value="V__BATT07"><option value="T__BATT08">
+      </datalist>
+      <span class="phint">2,314 participants tracked &mdash; sketch searches a sample of 8</span>
     </div>
+  </div>
+  <div class="row" id="pillsrow" hidden>
+    <div class="flabel">Selected</div>
+    <div class="pills" id="pills"></div>
   </div>
   <div class="row">
     <div class="flabel">Service</div>
@@ -185,74 +201,179 @@ compare on equal terms.</p>
 
 <div class="kpis">
   <div class="kpi">
-    <div class="k">BM revenue, selected participants</div>
-    <div class="v num">£408,510 <small>/ 7d</small></div>
-    <div class="ref num">across 8 participants</div>
+    <div class="k">Total BM revenue, market</div>
+    <div class="v num">£4.82m <small>/ 7d</small></div>
+    <div class="ref num">2,314 participants</div>
   </div>
   <div class="kpi">
-    <div class="k">Median &pound;/MW/day (BM)</div>
-    <div class="v num">£82.50</div>
-    <div class="ref num">range £58.20&ndash;£126.00</div>
+    <div class="k">Median &pound;/MW/day, market</div>
+    <div class="v num">£78.40</div>
+    <div class="ref num">middle 50%: £58&ndash;£104</div>
   </div>
   <div class="kpi">
-    <div class="k">EAC cleared capacity</div>
-    <div class="v num">520 <small>MW</small></div>
+    <div class="k">EAC cleared capacity, market</div>
+    <div class="v num">7,230 <small>MW</small></div>
     <div class="ref num">frequency response + reserve</div>
   </div>
   <div class="kpi">
-    <div class="k">Active participants</div>
-    <div class="v num">8</div>
-    <div class="ref num">of 8 tracked</div>
+    <div class="k">Participants active</div>
+    <div class="v num">2,314</div>
+    <div class="ref num">cleared at least one service</div>
   </div>
 </div>
 
-<h2>Ancillary service participation &mdash; Enduring Auction Capability</h2>
-<p class="lede">Cleared volume by service family, per participant, for the selected window. EAC covers
-NESO's frequency response (Dynamic Containment, Moderation, Regulation &mdash; Low and High) and
-reserve products; the table below the chart carries the individual service breakdown.</p>
+<h2>Market summary &mdash; Enduring Auction Capability</h2>
+<p class="lede">Total cleared volume by service family, across every participant. This is the
+default, aggregate view &mdash; it doesn't change size as more participants join the market.</p>
 <hr class="rule">
 
-<svg viewBox="0 0 900 340" role="img" aria-label="Cleared MW by participant and service family" preserveAspectRatio="xMidYMid meet">
+<svg viewBox="0 0 900 170" role="img" aria-label="Total cleared MW by service family, across the market" preserveAspectRatio="xMidYMid meet">
+<text class="ax" x="178" y="33.0" text-anchor="end">Frequency response, Low</text>
+<rect class="eac-fl" x="190" y="16" width="650.0" height="26"><title>Frequency response, Low: 3,180 MW</title></rect>
+<text class="ax num" x="850.0" y="33.0" text-anchor="start">3,180 MW</text>
+<text class="ax" x="178" y="79.0" text-anchor="end">Frequency response, High</text>
+<rect class="eac-fh" x="190" y="62" width="539.6" height="26"><title>Frequency response, High: 2,640 MW</title></rect>
+<text class="ax num" x="739.6" y="79.0" text-anchor="start">2,640 MW</text>
+<text class="ax" x="178" y="125.0" text-anchor="end">Reserve</text>
+<rect class="eac-r" x="190" y="108" width="288.2" height="26"><title>Reserve: 1,410 MW</title></rect>
+<text class="ax num" x="488.2" y="125.0" text-anchor="start">1,410 MW</text>
+</svg>
+<p class="section-note">1,842 participants cleared at least one frequency response service this window; 690 cleared a reserve service.</p>
+
+<h2>Balancing Mechanism &mdash; market distribution</h2>
+<p class="lede">How &pound;/MW/day is spread across every active participant, plus the highest earners. A
+bar-per-participant chart isn't usable at this scale &mdash; this is the view that stays readable
+whether the market has 8 participants or 8,000.</p>
+<hr class="rule">
+
+<svg viewBox="0 0 890 250" role="img" aria-label="Distribution of pounds per megawatt per day across all participants" preserveAspectRatio="xMidYMid meet">
+<rect class="histbar" x="50.0" y="205.7" width="82.2" height="14.3"><title>£&lt;20/MW/day: 40 participants</title></rect>
+<text class="ax num" x="91.1" y="199.7" text-anchor="middle">40</text>
+<text class="ax sm" x="91.1" y="238.0" text-anchor="middle">£&lt;20</text>
+<rect class="histbar" x="142.2" y="155.7" width="82.2" height="64.3"><title>£20-40/MW/day: 180 participants</title></rect>
+<text class="ax num" x="183.3" y="149.7" text-anchor="middle">180</text>
+<text class="ax sm" x="183.3" y="238.0" text-anchor="middle">£20-40</text>
+<rect class="histbar" x="234.4" y="73.6" width="82.2" height="146.4"><title>£40-60/MW/day: 410 participants</title></rect>
+<text class="ax num" x="275.6" y="67.6" text-anchor="middle">410</text>
+<text class="ax sm" x="275.6" y="238.0" text-anchor="middle">£40-60</text>
+<rect class="histbar" x="326.7" y="20.0" width="82.2" height="200.0"><title>£60-80/MW/day: 560 participants</title></rect>
+<text class="ax num" x="367.8" y="14.0" text-anchor="middle">560</text>
+<text class="ax sm" x="367.8" y="238.0" text-anchor="middle">£60-80</text>
+<rect class="histbar" x="418.9" y="34.3" width="82.2" height="185.7"><title>£80-100/MW/day: 520 participants</title></rect>
+<text class="ax num" x="460.0" y="28.3" text-anchor="middle">520</text>
+<text class="ax sm" x="460.0" y="238.0" text-anchor="middle">£80-100</text>
+<rect class="histbar" x="511.1" y="98.6" width="82.2" height="121.4"><title>£100-120/MW/day: 340 participants</title></rect>
+<text class="ax num" x="552.2" y="92.6" text-anchor="middle">340</text>
+<text class="ax sm" x="552.2" y="238.0" text-anchor="middle">£100-120</text>
+<rect class="histbar" x="603.3" y="162.9" width="82.2" height="57.1"><title>£120-140/MW/day: 160 participants</title></rect>
+<text class="ax num" x="644.4" y="156.9" text-anchor="middle">160</text>
+<text class="ax sm" x="644.4" y="238.0" text-anchor="middle">£120-140</text>
+<rect class="histbar" x="695.6" y="195.0" width="82.2" height="25.0"><title>£140-160/MW/day: 70 participants</title></rect>
+<text class="ax num" x="736.7" y="189.0" text-anchor="middle">70</text>
+<text class="ax sm" x="736.7" y="238.0" text-anchor="middle">£140-160</text>
+<rect class="histbar" x="787.8" y="207.9" width="82.2" height="12.1"><title>£160+/MW/day: 34 participants</title></rect>
+<text class="ax num" x="828.9" y="201.9" text-anchor="middle">34</text>
+<text class="ax sm" x="828.9" y="238.0" text-anchor="middle">£160+</text>
+<line class="axline" x1="50" x2="870" y1="220" y2="220"/>
+</svg>
+
+<h3>Top participants by &pound;/MW/day</h3>
+<svg viewBox="0 0 900 288" role="img" aria-label="Top participants ranked by pounds per megawatt per day" preserveAspectRatio="xMidYMid meet">
+<text class="ax" x="140" y="29.0" text-anchor="end">T__BATT04</text>
+<rect class="rankbar" x="150" y="16" width="620.0" height="18"><title>T__BATT04: £126.0/MW/day</title></rect>
+<text class="ax num" x="778.0" y="29.0" text-anchor="start">£126.0/MW/day</text>
+<text class="ax" x="140" y="61.0" text-anchor="end">T__BATT08</text>
+<rect class="rankbar" x="150" y="48" width="531.4" height="18"><title>T__BATT08: £108.0/MW/day</title></rect>
+<text class="ax num" x="689.4" y="61.0" text-anchor="start">£108.0/MW/day</text>
+<text class="ax" x="140" y="93.0" text-anchor="end">T__BATT03</text>
+<rect class="rankbar" x="150" y="80" width="501.9" height="18"><title>T__BATT03: £102.0/MW/day</title></rect>
+<text class="ax num" x="659.9" y="93.0" text-anchor="start">£102.0/MW/day</text>
+<text class="ax" x="140" y="125.0" text-anchor="end">T__BATT06</text>
+<rect class="rankbar" x="150" y="112" width="413.3" height="18"><title>T__BATT06: £84.0/MW/day</title></rect>
+<text class="ax num" x="571.3" y="125.0" text-anchor="start">£84.0/MW/day</text>
+<text class="ax" x="140" y="157.0" text-anchor="end">V__BATT02</text>
+<rect class="rankbar" x="150" y="144" width="398.6" height="18"><title>V__BATT02: £81.0/MW/day</title></rect>
+<text class="ax num" x="556.6" y="157.0" text-anchor="start">£81.0/MW/day</text>
+<text class="ax" x="140" y="189.0" text-anchor="end">V__BATT01</text>
+<rect class="rankbar" x="150" y="176" width="344.4" height="18"><title>V__BATT01: £70.0/MW/day</title></rect>
+<text class="ax num" x="502.4" y="189.0" text-anchor="start">£70.0/MW/day</text>
+<text class="ax" x="140" y="221.0" text-anchor="end">V__BATT05</text>
+<rect class="rankbar" x="150" y="208" width="295.2" height="18"><title>V__BATT05: £60.0/MW/day</title></rect>
+<text class="ax num" x="453.2" y="221.0" text-anchor="start">£60.0/MW/day</text>
+<text class="ax" x="140" y="253.0" text-anchor="end">V__BATT07</text>
+<rect class="rankbar" x="150" y="240" width="286.4" height="18"><title>V__BATT07: £58.2/MW/day</title></rect>
+<text class="ax num" x="444.4" y="253.0" text-anchor="start">£58.2/MW/day</text>
+</svg>
+<p class="section-note">Showing the top 8 of 2,314 tracked participants. Search above to look up a specific one instead.</p>
+
+<h2>Selected participants</h2>
+<p class="lede">Full EAC and Balancing Mechanism detail for whichever participants you've searched for above.</p>
+<hr class="rule">
+
+<div id="selected-empty" class="empty-state">
+  No participants selected. Search by participant or BMU ID above to see their detailed activity here.
+</div>
+
+<div id="selected-detail" hidden>
+
+<h3>Ancillary service participation</h3>
+<svg viewBox="0 0 900 340" id="selected-eac-chart" role="img" aria-label="Cleared MW by selected participant and service family" preserveAspectRatio="xMidYMid meet">
+<g data-p="V__BATT01">
 <rect class="eac-fl" x="150.0" y="20" width="40.0" height="22"><title>V__BATT01 Frequency response Low: 8 MW</title></rect>
 <rect class="eac-fh" x="190.0" y="20" width="30.0" height="22"><title>V__BATT01 Frequency response High: 6 MW</title></rect>
 <rect class="eac-r" x="220.0" y="20" width="20.0" height="22"><title>V__BATT01 Reserve: 4 MW</title></rect>
+<text class="ax" x="140" y="35.0" text-anchor="end">V__BATT01</text>
+<text class="ax num" x="250.0" y="35.0" text-anchor="start">18 MW</text>
+</g>
+<g data-p="V__BATT02">
 <rect class="eac-fl" x="150.0" y="60" width="100.0" height="22"><title>V__BATT02 Frequency response Low: 20 MW</title></rect>
 <rect class="eac-fh" x="250.0" y="60" width="75.0" height="22"><title>V__BATT02 Frequency response High: 15 MW</title></rect>
 <rect class="eac-r" x="325.0" y="60" width="50.0" height="22"><title>V__BATT02 Reserve: 10 MW</title></rect>
+<text class="ax" x="140" y="75.0" text-anchor="end">V__BATT02</text>
+<text class="ax num" x="385.0" y="75.0" text-anchor="start">45 MW</text>
+</g>
+<g data-p="T__BATT03">
 <rect class="eac-fl" x="150.0" y="100" width="200.0" height="22"><title>T__BATT03 Frequency response Low: 40 MW</title></rect>
 <rect class="eac-fh" x="350.0" y="100" width="175.0" height="22"><title>T__BATT03 Frequency response High: 35 MW</title></rect>
 <rect class="eac-r" x="525.0" y="100" width="75.0" height="22"><title>T__BATT03 Reserve: 15 MW</title></rect>
+<text class="ax" x="140" y="115.0" text-anchor="end">T__BATT03</text>
+<text class="ax num" x="610.0" y="115.0" text-anchor="start">90 MW</text>
+</g>
+<g data-p="T__BATT04">
 <rect class="eac-fl" x="150.0" y="140" width="300.0" height="22"><title>T__BATT04 Frequency response Low: 60 MW</title></rect>
 <rect class="eac-fh" x="450.0" y="140" width="250.0" height="22"><title>T__BATT04 Frequency response High: 50 MW</title></rect>
 <rect class="eac-r" x="700.0" y="140" width="150.0" height="22"><title>T__BATT04 Reserve: 30 MW</title></rect>
+<text class="ax" x="140" y="155.0" text-anchor="end">T__BATT04</text>
+<text class="ax num" x="860.0" y="155.0" text-anchor="start">140 MW</text>
+</g>
+<g data-p="V__BATT05">
 <rect class="eac-fl" x="150.0" y="180" width="60.0" height="22"><title>V__BATT05 Frequency response Low: 12 MW</title></rect>
 <rect class="eac-fh" x="210.0" y="180" width="50.0" height="22"><title>V__BATT05 Frequency response High: 10 MW</title></rect>
 <rect class="eac-r" x="260.0" y="180" width="25.0" height="22"><title>V__BATT05 Reserve: 5 MW</title></rect>
+<text class="ax" x="140" y="195.0" text-anchor="end">V__BATT05</text>
+<text class="ax num" x="295.0" y="195.0" text-anchor="start">27 MW</text>
+</g>
+<g data-p="T__BATT06">
 <rect class="eac-fl" x="150.0" y="220" width="175.0" height="22"><title>T__BATT06 Frequency response Low: 35 MW</title></rect>
 <rect class="eac-fh" x="325.0" y="220" width="125.0" height="22"><title>T__BATT06 Frequency response High: 25 MW</title></rect>
 <rect class="eac-r" x="450.0" y="220" width="60.0" height="22"><title>T__BATT06 Reserve: 12 MW</title></rect>
+<text class="ax" x="140" y="235.0" text-anchor="end">T__BATT06</text>
+<text class="ax num" x="520.0" y="235.0" text-anchor="start">72 MW</text>
+</g>
+<g data-p="V__BATT07">
 <rect class="eac-fl" x="150.0" y="260" width="90.0" height="22"><title>V__BATT07 Frequency response Low: 18 MW</title></rect>
 <rect class="eac-fh" x="240.0" y="260" width="60.0" height="22"><title>V__BATT07 Frequency response High: 12 MW</title></rect>
 <rect class="eac-r" x="300.0" y="260" width="40.0" height="22"><title>V__BATT07 Reserve: 8 MW</title></rect>
+<text class="ax" x="140" y="275.0" text-anchor="end">V__BATT07</text>
+<text class="ax num" x="350.0" y="275.0" text-anchor="start">38 MW</text>
+</g>
+<g data-p="T__BATT08">
 <rect class="eac-fl" x="150.0" y="300" width="250.0" height="22"><title>T__BATT08 Frequency response Low: 50 MW</title></rect>
 <rect class="eac-fh" x="400.0" y="300" width="200.0" height="22"><title>T__BATT08 Frequency response High: 40 MW</title></rect>
 <rect class="eac-r" x="600.0" y="300" width="100.0" height="22"><title>T__BATT08 Reserve: 20 MW</title></rect>
-<text class="ax" x="140" y="35.0" text-anchor="end">V__BATT01</text>
-<text class="ax num" x="250.0" y="35.0" text-anchor="start">18 MW</text>
-<text class="ax" x="140" y="75.0" text-anchor="end">V__BATT02</text>
-<text class="ax num" x="385.0" y="75.0" text-anchor="start">45 MW</text>
-<text class="ax" x="140" y="115.0" text-anchor="end">T__BATT03</text>
-<text class="ax num" x="610.0" y="115.0" text-anchor="start">90 MW</text>
-<text class="ax" x="140" y="155.0" text-anchor="end">T__BATT04</text>
-<text class="ax num" x="860.0" y="155.0" text-anchor="start">140 MW</text>
-<text class="ax" x="140" y="195.0" text-anchor="end">V__BATT05</text>
-<text class="ax num" x="295.0" y="195.0" text-anchor="start">27 MW</text>
-<text class="ax" x="140" y="235.0" text-anchor="end">T__BATT06</text>
-<text class="ax num" x="520.0" y="235.0" text-anchor="start">72 MW</text>
-<text class="ax" x="140" y="275.0" text-anchor="end">V__BATT07</text>
-<text class="ax num" x="350.0" y="275.0" text-anchor="start">38 MW</text>
 <text class="ax" x="140" y="315.0" text-anchor="end">T__BATT08</text>
 <text class="ax num" x="710.0" y="315.0" text-anchor="start">110 MW</text>
+</g>
 </svg>
 <div class="legend">
   <span><span class="swatch" style="background:var(--navy)"></span>Frequency response, Low</span>
@@ -261,7 +382,7 @@ reserve products; the table below the chart carries the individual service break
 </div>
 
 <table id="tbl-eac">
-  <caption>EAC clearing detail by participant and individual service</caption>
+  <caption>EAC clearing detail, selected participants</caption>
   <thead>
     <tr><th scope="col" style="text-align:left">Participant</th><th scope="col" style="text-align:left">Service</th>
     <th scope="col">Cleared volume</th><th scope="col">Cleared price</th><th scope="col" style="text-align:left">Window</th></tr>
@@ -293,43 +414,12 @@ reserve products; the table below the chart carries the individual service break
     <tr data-p="V__BATT01" data-svc="r"><th scope="row">V__BATT01</th><td style="text-align:left"><span class="svc-pill r">QR</span></td><td>4 MW</td><td>£4.05/MW/h</td><td style="text-align:left">24&ndash;30 Aug</td></tr>
   </tbody>
 </table>
-<p class="note-inline">DC = Dynamic Containment, DM = Dynamic Moderation, DR = Dynamic Regulation
+<p class="section-note">DC = Dynamic Containment, DM = Dynamic Moderation, DR = Dynamic Regulation
 (&ndash;L / &ndash;H = Low / High frequency response), QR = Quick Reserve.</p>
 
-<h2>Balancing Mechanism activity</h2>
-<p class="lede">Bids and offers accepted by the grid, and the revenue they generated, normalised to
-&pound;/MW/day of registered capacity so participants of different sizes rank on equal terms.</p>
-<hr class="rule">
-
-<svg viewBox="0 0 900 288" role="img" aria-label="Balancing Mechanism revenue per MW per day, ranked" preserveAspectRatio="xMidYMid meet">
-<text class="ax" x="140" y="29.0" text-anchor="end">T__BATT04</text>
-<rect class="rankbar" x="150" y="16" width="620.0" height="18"><title>T__BATT04: £126.0/MW/day</title></rect>
-<text class="ax num" x="778.0" y="29.0" text-anchor="start">£126.0/MW/day</text>
-<text class="ax" x="140" y="61.0" text-anchor="end">T__BATT08</text>
-<rect class="rankbar" x="150" y="48" width="531.4" height="18"><title>T__BATT08: £108.0/MW/day</title></rect>
-<text class="ax num" x="689.4" y="61.0" text-anchor="start">£108.0/MW/day</text>
-<text class="ax" x="140" y="93.0" text-anchor="end">T__BATT03</text>
-<rect class="rankbar" x="150" y="80" width="501.9" height="18"><title>T__BATT03: £102.0/MW/day</title></rect>
-<text class="ax num" x="659.9" y="93.0" text-anchor="start">£102.0/MW/day</text>
-<text class="ax" x="140" y="125.0" text-anchor="end">T__BATT06</text>
-<rect class="rankbar" x="150" y="112" width="413.3" height="18"><title>T__BATT06: £84.0/MW/day</title></rect>
-<text class="ax num" x="571.3" y="125.0" text-anchor="start">£84.0/MW/day</text>
-<text class="ax" x="140" y="157.0" text-anchor="end">V__BATT02</text>
-<rect class="rankbar" x="150" y="144" width="398.6" height="18"><title>V__BATT02: £81.0/MW/day</title></rect>
-<text class="ax num" x="556.6" y="157.0" text-anchor="start">£81.0/MW/day</text>
-<text class="ax" x="140" y="189.0" text-anchor="end">V__BATT01</text>
-<rect class="rankbar" x="150" y="176" width="344.4" height="18"><title>V__BATT01: £70.0/MW/day</title></rect>
-<text class="ax num" x="502.4" y="189.0" text-anchor="start">£70.0/MW/day</text>
-<text class="ax" x="140" y="221.0" text-anchor="end">V__BATT05</text>
-<rect class="rankbar" x="150" y="208" width="295.2" height="18"><title>V__BATT05: £60.0/MW/day</title></rect>
-<text class="ax num" x="453.2" y="221.0" text-anchor="start">£60.0/MW/day</text>
-<text class="ax" x="140" y="253.0" text-anchor="end">V__BATT07</text>
-<rect class="rankbar" x="150" y="240" width="286.4" height="18"><title>V__BATT07: £58.2/MW/day</title></rect>
-<text class="ax num" x="444.4" y="253.0" text-anchor="start">£58.2/MW/day</text>
-</svg>
-
+<h3>Balancing Mechanism activity</h3>
 <table id="tbl-bm">
-  <caption>Accepted bids/offers and revenue, 7-day window</caption>
+  <caption>Accepted bids/offers and revenue, selected participants, 7-day window</caption>
   <thead>
     <tr><th scope="col" style="text-align:left">Participant</th><th scope="col">Capacity</th>
     <th scope="col">Offers accepted</th><th scope="col">Bids accepted</th>
@@ -346,7 +436,9 @@ reserve products; the table below the chart carries the individual service break
     <tr data-p="V__BATT07"><th scope="row">V__BATT07</th><td>40 MW</td><td>260 MWh</td><td>140 MWh</td><td>£16,300</td><td class="em">58.20</td></tr>
   </tbody>
 </table>
-<p class="dl" style="font-size:13px; margin-top:10px;"><a href="#">Download this view as CSV</a></p>
+<p class="dl" style="font-size:13px; margin-top:10px;"><a href="#">Download selected participants as CSV</a></p>
+
+</div>
 
 <footer>
   <strong>Data, assumptions and limits</strong>
@@ -354,7 +446,7 @@ reserve products; the table below the chart carries the individual service break
     <dt>Sources</dt><dd>NESO Enduring Auction Capability results (frequency response, reserve); Elexon Insights bid-offer acceptance data (Balancing Mechanism).</dd>
     <dt>Revenue method</dt><dd>&pound;/MW/day = Balancing Mechanism revenue over the window &divide; registered capacity &divide; days in window. EAC clearing price and volume shown separately, not summed into this figure.</dd>
     <dt>Participant scope</dt><dd>Battery storage units only. Co-located or hybrid sites shown at their registered BMU capacity.</dd>
-    <dt>Status</dt><dd>Design sketch. Every figure on this page is synthetic sample data.</dd>
+    <dt>Status</dt><dd>Design sketch. Every figure on this page, including the market-wide totals and the 2,314-participant scale, is synthetic sample data.</dd>
   </dl>
 </footer>
 
@@ -362,43 +454,68 @@ reserve products; the table below the chart carries the individual service break
 
 <script>
 (function () {
-  var chips = document.querySelectorAll('#chips-participant .chip');
-  var svcChips = document.querySelectorAll('.chips .chip[data-svc]');
+  var KNOWN = ["V__BATT01","V__BATT02","T__BATT03","T__BATT04","V__BATT05","T__BATT06","V__BATT07","T__BATT08"];
+  var selected = new Set();
+
+  var input = document.getElementById('psearch');
+  var pillsEl = document.getElementById('pills');
+  var pillsRow = document.getElementById('pillsrow');
+  var emptyEl = document.getElementById('selected-empty');
+  var detailEl = document.getElementById('selected-detail');
   var eacRows = document.querySelectorAll('#tbl-eac tbody tr');
   var bmRows = document.querySelectorAll('#tbl-bm tbody tr');
+  var eacGroups = document.querySelectorAll('#selected-eac-chart g[data-p]');
+  var svcChips = document.querySelectorAll('.chips .chip[data-svc]');
 
-  function activeSet(nodeList, attr) {
+  function activeServices() {
     var s = new Set();
-    nodeList.forEach(function (el) {
-      if (el.classList.contains('active')) s.add(el.getAttribute(attr));
-    });
+    svcChips.forEach(function (c) { if (c.classList.contains('active')) s.add(c.dataset.svc); });
     return s;
   }
 
-  function apply() {
-    var participants = activeSet(chips, 'data-p');
-    var services = activeSet(svcChips, 'data-svc');
+  function render() {
+    pillsRow.hidden = selected.size === 0;
+    emptyEl.hidden = selected.size > 0;
+    detailEl.hidden = selected.size === 0;
 
+    pillsEl.innerHTML = '';
+    selected.forEach(function (id) {
+      var pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.textContent = id;
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('aria-label', 'Remove ' + id);
+      btn.textContent = '×';
+      btn.addEventListener('click', function () { selected.delete(id); render(); });
+      pill.appendChild(btn);
+      pillsEl.appendChild(pill);
+    });
+
+    var services = activeServices();
+    eacGroups.forEach(function (g) { g.hidden = !selected.has(g.dataset.p); });
     eacRows.forEach(function (row) {
-      var show = participants.has(row.getAttribute('data-p')) && services.has(row.getAttribute('data-svc'));
-      row.hidden = !show;
+      row.hidden = !(selected.has(row.dataset.p) && services.has(row.dataset.svc));
     });
-    bmRows.forEach(function (row) {
-      row.hidden = !participants.has(row.getAttribute('data-p'));
-    });
+    bmRows.forEach(function (row) { row.hidden = !selected.has(row.dataset.p); });
   }
 
-  chips.forEach(function (chip) {
-    chip.addEventListener('click', function () {
-      chip.classList.toggle('active');
-      apply();
-    });
+  function tryAdd(raw) {
+    var id = raw.trim().toUpperCase();
+    if (KNOWN.indexOf(id) === -1) return false;
+    selected.add(id);
+    input.value = '';
+    render();
+    return true;
+  }
+
+  input.addEventListener('change', function () { tryAdd(input.value); });
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); tryAdd(input.value); }
   });
+
   svcChips.forEach(function (chip) {
-    chip.addEventListener('click', function () {
-      chip.classList.toggle('active');
-      apply();
-    });
+    chip.addEventListener('click', function () { chip.classList.toggle('active'); render(); });
   });
 
   var rangeBtns = document.querySelectorAll('.filters .range button');
@@ -407,9 +524,11 @@ reserve products; the table below the chart carries the individual service break
       rangeBtns.forEach(function (b) { b.classList.remove('on'); });
       btn.classList.add('on');
       // Window switching against real data is wired once the metrics stage
-      // exists for this page -- this control is layout-only for now.
+      // exists for this page -- layout-only for now.
     });
   });
+
+  render();
 })();
 </script>
 
