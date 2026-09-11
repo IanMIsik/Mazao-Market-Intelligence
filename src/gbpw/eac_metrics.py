@@ -156,7 +156,12 @@ def search_participants(
 ) -> list[str]:
     """Distinct participant names matching a case-insensitive substring of q,
     scoped to technology_type. No date filtering -- searches the whole
-    table's distinct participant list, not just the current window.
+    known participant list, not just the current window.
+
+    Queries eac_known_units, not eac_results directly -- a few hundred rows
+    versus a table that can run into the millions, kept in sync by
+    upsert_eac_results(). Called on every debounced keystroke, so this needs
+    to stay fast regardless of how much history gets backfilled.
     """
     where = ["participant LIKE ? ESCAPE '\\'"]
     like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -165,7 +170,7 @@ def search_participants(
         where.append("technology_type = ?")
         params.append(technology_type)
     rows = conn.execute(
-        f"SELECT DISTINCT participant FROM eac_results WHERE {' AND '.join(where)} "
+        f"SELECT DISTINCT participant FROM eac_known_units WHERE {' AND '.join(where)} "
         f"COLLATE NOCASE ORDER BY participant LIMIT ?",
         [*params, limit],
     ).fetchall()

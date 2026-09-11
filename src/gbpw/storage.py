@@ -17,6 +17,12 @@ Schema:
         both must be fetched and summed for a unit's total BM revenue. This
         is cashflow only -- no accepted-volume (MWh) data; that needs a
         separate ISPSTACK ingest, not built yet. See ingest/elexon_bm.py.
+        idx_bm_cashflows_bmu_sd exists because bm_metrics.bm_activity()'s
+        join is driven from the (small) battery-unit side, not the date
+        range -- confirmed by EXPLAIN QUERY PLAN and measured live: without
+        this index that join takes ~2.5s even for a 7-day window; with it,
+        ~100ms. A plain sd index alone doesn't help because the query
+        planner doesn't choose to use it in this join shape.
 
 Series stored in `prices`:
     day_ahead        -- Elexon Market Index Data, GBP/MWh          (run='NA')
@@ -99,6 +105,25 @@ CREATE TABLE IF NOT EXISTS eac_results (
 CREATE INDEX IF NOT EXISTS idx_eac_sd ON eac_results(sd);
 CREATE INDEX IF NOT EXISTS idx_eac_participant ON eac_results(participant);
 CREATE INDEX IF NOT EXISTS idx_eac_technology ON eac_results(technology_type);
+CREATE INDEX IF NOT EXISTS idx_eac_tech_sd ON eac_results(technology_type, sd);
+CREATE INDEX IF NOT EXISTS idx_eac_tech_participant ON eac_results(technology_type, participant);
+
+-- Distinct (technology_type, auction_unit) -> participant, kept in sync by
+-- upsert_eac_results(). At a few hundred rows this stays fast regardless of
+-- how large eac_results grows -- see eac_metrics.search_participants() and
+-- bm_metrics.battery_bm_units(), both of which used to run this lookup
+-- against the full multi-million-row eac_results table on every request
+-- (measured: ~500ms standalone, and inside bm_activity()'s join the query
+-- planner abandoned its indexes entirely and fell back to a full table scan,
+-- ~5s). Neither "which units are batteries" nor "known participant names"
+-- needs per-settlement-period granularity or a date filter.
+CREATE TABLE IF NOT EXISTS eac_known_units (
+    technology_type  TEXT NOT NULL,
+    auction_unit     TEXT NOT NULL,
+    participant      TEXT NOT NULL,
+    PRIMARY KEY (technology_type, auction_unit)
+);
+CREATE INDEX IF NOT EXISTS idx_eac_known_units_participant ON eac_known_units(technology_type, participant);
 
 CREATE TABLE IF NOT EXISTS bm_unit_reference (
     national_grid_bm_unit  TEXT PRIMARY KEY,
@@ -119,6 +144,7 @@ CREATE TABLE IF NOT EXISTS bm_cashflows (
     PRIMARY KEY (sd, sp, national_grid_bm_unit, bid_offer)
 );
 CREATE INDEX IF NOT EXISTS idx_bm_cashflows_bmu ON bm_cashflows(national_grid_bm_unit);
+CREATE INDEX IF NOT EXISTS idx_bm_cashflows_bmu_sd ON bm_cashflows(national_grid_bm_unit, sd);
 """
 
 
@@ -196,6 +222,7 @@ def upsert_prices(conn: sqlite3.Connection, rows: Iterable[PriceRow], fetched_at
 def upsert_eac_results(conn: sqlite3.Connection, rows: Iterable[EacRow], fetched_at: datetime | None = None) -> int:
     fetched_at = fetched_at or datetime.now(timezone.utc)
     ts = fetched_at.isoformat()
+    rows = list(rows)  # consumed twice below (raw upsert + known-units derivation)
     data = [
         (
             r.neso_id, r.unit_result_id, r.service_type, r.auction_product, r.technology_type,
@@ -227,6 +254,16 @@ def upsert_eac_results(conn: sqlite3.Connection, rows: Iterable[EacRow], fetched
         """,
         data,
     )
+
+    known_units = {(r.technology_type, r.auction_unit, r.participant) for r in rows if r.technology_type}
+    conn.executemany(
+        """
+        INSERT INTO eac_known_units (technology_type, auction_unit, participant) VALUES (?, ?, ?)
+        ON CONFLICT (technology_type, auction_unit) DO UPDATE SET participant = excluded.participant
+        """,
+        list(known_units),
+    )
+
     conn.commit()
     return len(data)
 

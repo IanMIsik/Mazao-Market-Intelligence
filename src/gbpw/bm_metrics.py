@@ -1,13 +1,29 @@
 """
 Data layer for the Balancing Mechanism half of BESS Analytics -- Elexon's
 EBOCF cashflow data (`bm_cashflows`) joined to whichever units NESO's EAC
-data (`eac_results`) has already identified as batteries, via the shared
-national_grid_bm_unit / auction_unit code space (confirmed live -- see
-ingest/elexon_bm.py's module docstring).
+data has already identified as batteries, via the shared national_grid_bm_unit
+/ auction_unit code space (confirmed live -- see ingest/elexon_bm.py's
+module docstring).
+
+The battery-unit lookup goes through `eac_known_units` (a small, ingest-
+maintained table -- see storage.py), not the raw multi-million-row
+`eac_results` table. Measured on real data: with eac_results as the join
+input, this query took ~5s (the query planner abandoned its indexes inside
+the join and fell back to a full table scan); against eac_known_units
+(~200 rows) the same query is ~milliseconds. Don't revert this to querying
+eac_results directly without re-measuring.
 
 Cashflow only. EBOCF carries no accepted-volume (MWh) figures -- that needs
 a separate ISPSTACK ingest, not built yet (deferred per the user's explicit
 direction; see storage.py's module docstring).
+
+Bid and offer cashflow are kept separate throughout, not netted into a
+single figure before this point: they're different market actions (offer =
+accepted to increase output, bid = accepted to decrease it) and bid cashflow
+is often negative by nature (confirmed live: market-wide bid total was net
+negative, offer net positive, for the same window). A negative net total is
+a real, expected outcome, not a computation error -- keeping both sides
+alongside the net total is what makes that checkable.
 
 Capacity handling: `bm_unit_reference.generation_capacity_mw` is 0 or NULL
 for a real minority of matched battery units (confirmed live: 20 of 143 in
@@ -27,15 +43,14 @@ DAYS_EPSILON = 1e-9
 
 
 def battery_bm_units(conn: sqlite3.Connection, technology_type: str | None = DEFAULT_TECHNOLOGY) -> list[str]:
-    """Distinct auction_unit values from eac_results for the given
-    technology -- the national_grid_bm_unit codes this page's BM section is
-    scoped to.
+    """Distinct auction_unit values for the given technology -- the
+    national_grid_bm_unit codes this page's BM section is scoped to.
     """
     if technology_type is None:
-        rows = conn.execute("SELECT DISTINCT auction_unit FROM eac_results").fetchall()
+        rows = conn.execute("SELECT DISTINCT auction_unit FROM eac_known_units").fetchall()
     else:
         rows = conn.execute(
-            "SELECT DISTINCT auction_unit FROM eac_results WHERE technology_type = ?", (technology_type,)
+            "SELECT DISTINCT auction_unit FROM eac_known_units WHERE technology_type = ?", (technology_type,)
         ).fetchall()
     return [r[0] for r in rows]
 
@@ -54,31 +69,38 @@ def bm_activity(
     eac_params = [] if technology_type is None else [technology_type]
     rows = conn.execute(
         f"""
-        SELECT c.national_grid_bm_unit,
-               SUM(c.total_cashflow) AS total_revenue_gbp,
+        SELECT c.national_grid_bm_unit, c.bid_offer, SUM(c.total_cashflow) AS cashflow,
                r.lead_party_name, r.generation_capacity_mw
         FROM bm_cashflows c
-        JOIN (SELECT DISTINCT auction_unit FROM eac_results WHERE {eac_where}) eac
+        JOIN (SELECT DISTINCT auction_unit FROM eac_known_units WHERE {eac_where}) eac
           ON eac.auction_unit = c.national_grid_bm_unit
         LEFT JOIN bm_unit_reference r ON r.national_grid_bm_unit = c.national_grid_bm_unit
         WHERE c.sd >= ? AND c.sd <= ?
-        GROUP BY c.national_grid_bm_unit
-        ORDER BY total_revenue_gbp DESC
+        GROUP BY c.national_grid_bm_unit, c.bid_offer
         """,
         [*eac_params, start.isoformat(), end.isoformat()],
     ).fetchall()
 
-    entries = []
-    for national_grid_bm_unit, total_revenue_gbp, lead_party_name, capacity_mw in rows:
-        entries.append(
+    by_unit: dict[str, dict] = {}
+    for national_grid_bm_unit, bid_offer, cashflow, lead_party_name, capacity_mw in rows:
+        entry = by_unit.setdefault(
+            national_grid_bm_unit,
             {
                 "national_grid_bm_unit": national_grid_bm_unit,
                 "lead_party_name": lead_party_name,
-                "total_revenue_gbp": total_revenue_gbp or 0.0,
+                "bid_revenue_gbp": 0.0,
+                "offer_revenue_gbp": 0.0,
                 "generation_capacity_mw": capacity_mw,
-                "gbp_per_mw_per_day": _gbp_per_mw_per_day(total_revenue_gbp or 0.0, capacity_mw, days),
-            }
+            },
         )
+        entry[f"{bid_offer}_revenue_gbp"] = cashflow or 0.0
+
+    entries = []
+    for entry in by_unit.values():
+        total = entry["bid_revenue_gbp"] + entry["offer_revenue_gbp"]
+        entry["total_revenue_gbp"] = total
+        entry["gbp_per_mw_per_day"] = _gbp_per_mw_per_day(total, entry["generation_capacity_mw"], days)
+        entries.append(entry)
 
     with_capacity = [e for e in entries if e["gbp_per_mw_per_day"] is not None]
     without_capacity = [e for e in entries if e["gbp_per_mw_per_day"] is None]
@@ -87,6 +109,8 @@ def bm_activity(
 
     return {
         "total_revenue_gbp": sum(e["total_revenue_gbp"] for e in entries),
+        "total_bid_revenue_gbp": sum(e["bid_revenue_gbp"] for e in entries),
+        "total_offer_revenue_gbp": sum(e["offer_revenue_gbp"] for e in entries),
         "units_with_capacity": len(with_capacity),
         "units_without_capacity": len(without_capacity),
         "median_gbp_per_mw_day": _median(e["gbp_per_mw_per_day"] for e in with_capacity),
@@ -124,16 +148,19 @@ def unit_detail(conn: sqlite3.Connection, national_grid_bm_units: list[str], sta
     ).fetchall()
 
     out: dict[str, dict] = {
-        u: {"bid_gbp": 0.0, "offer_gbp": 0.0, "total_gbp": 0.0, "generation_capacity_mw": None, "gbp_per_mw_per_day": None}
+        u: {
+            "bid_revenue_gbp": 0.0, "offer_revenue_gbp": 0.0, "total_revenue_gbp": 0.0,
+            "generation_capacity_mw": None, "gbp_per_mw_per_day": None,
+        }
         for u in national_grid_bm_units
     }
     for unit, bid_offer, total, capacity_mw in rows:
         entry = out[unit]
-        entry[f"{bid_offer}_gbp"] = total or 0.0
+        entry[f"{bid_offer}_revenue_gbp"] = total or 0.0
         entry["generation_capacity_mw"] = capacity_mw
 
     for entry in out.values():
-        entry["total_gbp"] = entry["bid_gbp"] + entry["offer_gbp"]
-        entry["gbp_per_mw_per_day"] = _gbp_per_mw_per_day(entry["total_gbp"], entry["generation_capacity_mw"], days)
+        entry["total_revenue_gbp"] = entry["bid_revenue_gbp"] + entry["offer_revenue_gbp"]
+        entry["gbp_per_mw_per_day"] = _gbp_per_mw_per_day(entry["total_revenue_gbp"], entry["generation_capacity_mw"], days)
 
     return out

@@ -53,6 +53,11 @@ and see their own EAC and Balancing Mechanism activity in detail.</p>
     <div class="ref num">{{ activity.units_with_capacity + activity.units_without_capacity }} battery BM unit(s)</div>
   </div>
   <div class="kpi">
+    <div class="k">Offer / bid revenue, market</div>
+    <div class="v2 num">£{{ '%.0f'|format(activity.total_offer_revenue_gbp) }} <small>offer</small></div>
+    <div class="v2 num">£{{ '%.0f'|format(activity.total_bid_revenue_gbp) }} <small>bid</small></div>
+  </div>
+  <div class="kpi">
     <div class="k">Median &pound;/MW/day, market</div>
     {% if activity.median_gbp_per_mw_day is not none %}
     <div class="v num">£{{ '%.2f'|format(activity.median_gbp_per_mw_day) }}</div>
@@ -155,7 +160,7 @@ Cashflow only &mdash; accepted bid/offer volumes (MWh) need a separate ISPSTACK 
   <strong>Data, assumptions and limits</strong>
   <dl>
     <dt>Sources</dt><dd>NESO Enduring Auction Capability results (frequency response, reserve); Elexon EBOCF (Balancing Mechanism cashflow).</dd>
-    <dt>Revenue method</dt><dd>&pound;/MW/day = Balancing Mechanism cashflow (bid + offer) over the window &divide; registered capacity &divide; days in window. Shown only where capacity is known and nonzero. EAC clearing volume/price shown separately, not summed into this figure.</dd>
+    <dt>Revenue method</dt><dd>Total BM revenue = sum of every matched battery unit's Balancing Mechanism cashflow (offer cashflow plus bid cashflow) over the window. An accepted offer is a unit instructed to increase output (or reduce demand) and is normally a positive cashflow; an accepted bid is a unit instructed to decrease output (or increase demand), and is frequently negative since it can represent a payment made by the unit rather than to it. A negative net total is a real, expected market outcome, not a computation error. &pound;/MW/day = that net figure &divide; registered capacity &divide; days in window, shown only where capacity is known and nonzero. EAC clearing volume/price shown separately, not summed into this figure.</dd>
     <dt>Accepted volumes</dt><dd>Not yet available for the Balancing Mechanism section &mdash; EBOCF gives cashflow only. Needs a separate ISPSTACK ingest.</dd>
     <dt>Participant scope</dt><dd>Battery storage units only (NESO technologyType = Batteries), joined to Elexon BM units via the shared national grid BMU code.</dd>
     <dt>Status</dt><dd>Live data. Balancing Mechanism accepted-volume figures are not yet available &mdash; see above.</dd>
