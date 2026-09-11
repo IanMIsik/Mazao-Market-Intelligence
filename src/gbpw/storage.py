@@ -196,7 +196,15 @@ class BmCashflowRow:
 def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    # timeout=30 (vs sqlite3's 5s default) plus WAL mode: the web app now
+    # has a long-running write-heavy request (/gbpw/build, hundreds of
+    # commits over several minutes) that can genuinely overlap with normal
+    # page loads opening their own connection -- WAL lets those reads
+    # proceed without waiting on the writer, and the longer timeout covers
+    # the brief windows where two writers really do collide, instead of
+    # raising "database is locked".
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     return conn
 

@@ -271,7 +271,20 @@ def main(argv: list[str] | None = None) -> None:
             from .web.app import DB_PATH_ENV_VAR
 
             os.environ[DB_PATH_ENV_VAR] = str(args.db)
-            uvicorn.run("gbpw.web.app:create_app_from_env", factory=True, host=args.host, port=args.port, reload=True)
+            # reload_dirs=[src] is load-bearing, not cosmetic: without it
+            # uvicorn's watcher scans the whole project root, including
+            # data/*.db. /gbpw/build writes to that db hundreds of times
+            # during one ingest, and the watcher (a background thread)
+            # burns CPU rescanning it on every write, contending for the
+            # GIL with the request thread handling the actual build --
+            # confirmed live, this alone made a ~3-minute ingest look
+            # permanently hung (2700+ CPU-seconds burned in ~25 min
+            # wall-clock, almost all of it the watcher, not the request).
+            src_dir = str(Path(__file__).resolve().parents[1])
+            uvicorn.run(
+                "gbpw.web.app:create_app_from_env", factory=True,
+                host=args.host, port=args.port, reload=True, reload_dirs=[src_dir],
+            )
         else:
             from .web.app import create_app
 
