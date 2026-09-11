@@ -3,10 +3,12 @@ Command-line entry point tying ingest / narrative / render / publish together.
 
     gbpw ingest     --week-ending 2026-08-30 [--history-days 37]
     gbpw ingest-eac --start 2026-08-01 --end 2026-09-11 [--technology Batteries]
+    gbpw ingest-bm  --start 2026-08-01 --end 2026-09-11
     gbpw build      --week-ending 2026-08-30 --out out/gbpw-2026-08-30.html [--regenerate]
     gbpw publish    --week-ending 2026-08-30
     gbpw status     --week-ending 2026-08-30
     gbpw run        [--week-ending auto] [--out-dir out] [--regenerate]
+    gbpw serve      [--host 127.0.0.1] [--port 5000] [--reload]
 
 `run` is the one-shot form meant for a scheduler: ingest the trailing window
 then build, writing to <out-dir>/gbpw-<week-ending>.html. `--week-ending auto`
@@ -17,6 +19,13 @@ Enduring Auction Capability results for an arbitrary date range (chunked and
 resumable internally, see ingest/__init__.py:ingest_eac_range), for the
 BESS Analytics page rather than GB Power Weekly. A full 2-3 year backfill
 and a short recent window use the same command, just a wider --start/--end.
+
+`ingest-bm` pulls Elexon's Balancing Mechanism cashflow data (EBOCF) for the
+same page -- refreshes the BM unit reference table, then fetches bid+offer
+cashflows day by day for the given range. Cashflow only, no accepted volumes
+yet (see ingest/elexon_bm.py).
+
+`serve` starts the FastAPI app (GB Power Weekly + BESS Analytics) via uvicorn.
 """
 
 from __future__ import annotations
@@ -28,7 +37,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from .build import build_report, publish_report
-from .ingest import ingest_eac_range, ingest_week
+from .ingest import ingest_bm_cashflows_range, ingest_bmu_reference, ingest_eac_range, ingest_week
 from .metrics import IncompleteWeekError, build_week
 from .settlement import week_dates
 from .storage import DEFAULT_DB_PATH, connect, get_report
@@ -144,12 +153,23 @@ def main(argv: list[str] | None = None) -> None:
     p_eac.add_argument("--technology", default=None, help="e.g. Batteries -- omit to fetch every technology type")
     p_eac.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
+    p_bm = sub.add_parser("ingest-bm", help="fetch and store Elexon Balancing Mechanism cashflows for a date range")
+    p_bm.add_argument("--start", type=date.fromisoformat, required=True)
+    p_bm.add_argument("--end", type=date.fromisoformat, required=True)
+    p_bm.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+
     p_run = sub.add_parser("run", help="ingest + build in one step, for a scheduler")
     p_run.add_argument("--week-ending", type=_week_ending_or_auto, default="auto")
     p_run.add_argument("--out-dir", type=Path, default=Path("out"))
     p_run.add_argument("--history-days", type=int, default=37)
     p_run.add_argument("--regenerate", action="store_true")
     p_run.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+
+    p_serve = sub.add_parser("serve", help="run the FastAPI dev server (uvicorn)")
+    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument("--port", type=int, default=5000)
+    p_serve.add_argument("--reload", action="store_true", help="auto-reload on code changes (dev only)")
+    p_serve.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
     args = parser.parse_args(argv)
     conn = connect(args.db)
@@ -200,6 +220,29 @@ def main(argv: list[str] | None = None) -> None:
         ).fetchone()[0]
         print(f"Done, no failures. {count:,} row(s) on file for this range.")
 
+    elif args.command == "ingest-bm":
+        n_days = (args.end - args.start).days + 1
+        print(f"Refreshing BM unit reference, then ingesting {n_days} day(s) of cashflows: {args.start}..{args.end}")
+        ingest_bmu_reference(conn)
+        ingest_bm_cashflows_range(conn, args.start, args.end)
+        dates = [args.start + timedelta(days=i) for i in range(n_days)]
+        sd_list = [d.isoformat() for d in dates]
+        placeholders = ",".join("?" for _ in sd_list)
+        failures = conn.execute(
+            f"SELECT sd, note FROM fetch_log WHERE series = 'bm_cashflow' AND ok = 0 AND sd IN ({placeholders}) "
+            f"AND ts = (SELECT MAX(ts) FROM fetch_log f2 WHERE f2.series = 'bm_cashflow' AND f2.sd = fetch_log.sd)",
+            sd_list,
+        ).fetchall()
+        if failures:
+            print(f"Done, with failures covering {len(failures)} day(s):")
+            for sd, note in failures:
+                print(f"  {sd}: {note}")
+            sys.exit(1)
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM bm_cashflows WHERE sd IN ({placeholders})", sd_list
+        ).fetchone()[0]
+        print(f"Done, no failures. {count:,} row(s) on file for this range.")
+
     elif args.command == "status":
         healthy = _print_status(conn, args.week_ending, args.history_days)
         sys.exit(0 if healthy else 1)
@@ -220,6 +263,13 @@ def main(argv: list[str] | None = None) -> None:
         except IncompleteWeekError as e:
             print(f"Could not build week ending {week_ending} -- incomplete data:\n{e}")
             sys.exit(1)
+
+    elif args.command == "serve":
+        import uvicorn
+
+        from .web.app import create_app
+
+        uvicorn.run(create_app(db_path=args.db), host=args.host, port=args.port, reload=args.reload)
 
 
 if __name__ == "__main__":

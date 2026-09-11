@@ -3,13 +3,24 @@ from __future__ import annotations
 import sqlite3
 from datetime import date, timedelta
 
-from . import eac, elexon
-from ..storage import log_fetch, upsert_eac_results, upsert_prices
+from . import eac, elexon, elexon_bm
+from ..storage import (
+    BmCashflowRow,
+    BmUnitReferenceRow,
+    log_fetch,
+    upsert_bm_cashflows,
+    upsert_bm_unit_reference,
+    upsert_eac_results,
+    upsert_prices,
+)
 
 SERIES = ("day_ahead", "imbalance", "wind", "total_generation", "demand")
 
 EAC_SERIES = "eac"
 EAC_CHUNK_DAYS = 7  # bounds each NESO request; also the resumability granularity
+
+BM_CASHFLOW_SERIES = "bm_cashflow"
+BM_REFERENCE_SERIES = "bm_unit_reference"
 
 
 def ingest_day(conn: sqlite3.Connection, d: date) -> None:
@@ -76,3 +87,63 @@ def ingest_eac_range(
             for d in chunk_dates:
                 log_fetch(conn, EAC_SERIES, d, ok=False, note=str(e))
         chunk_start = chunk_end + timedelta(days=1)
+
+
+def _to_float(v: object) -> float | None:
+    if v in (None, ""):
+        return None
+    return float(v)  # type: ignore[arg-type]
+
+
+def ingest_bmu_reference(conn: sqlite3.Connection) -> None:
+    """Refreshes the whole BM unit reference table. Not date-scoped -- call
+    once per ingest run, not once per day. Logged under a fixed sentinel
+    date (today) since fetch_log's schema is date-shaped and this data
+    isn't.
+    """
+    try:
+        records = elexon_bm.fetch_bmu_reference()
+        rows = [
+            BmUnitReferenceRow(
+                national_grid_bm_unit=r["nationalGridBmUnit"],
+                elexon_bm_unit=r.get("elexonBmUnit"),
+                lead_party_name=r.get("leadPartyName"),
+                bm_unit_type=r.get("bmUnitType"),
+                generation_capacity_mw=_to_float(r.get("generationCapacity")),
+            )
+            for r in records
+            if r.get("nationalGridBmUnit")
+        ]
+        upsert_bm_unit_reference(conn, rows)
+        log_fetch(conn, BM_REFERENCE_SERIES, date.today(), ok=True, note=f"ok ({len(rows)} units)")
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, BM_REFERENCE_SERIES, date.today(), ok=False, note=str(e))
+
+
+def ingest_bm_cashflows_range(conn: sqlite3.Connection, start: date, end: date) -> None:
+    """Day-by-day (EBOCF has no multi-day range endpoint): fetches both
+    'bid' and 'offer' cashflows for each date and upserts both -- summing
+    them is bm_metrics.py's job, not stored pre-summed, so bid/offer stay
+    independently inspectable. Each day logged separately so a bad day
+    doesn't block the rest, same discipline as ingest_day.
+    """
+    d = start
+    while d <= end:
+        try:
+            rows: list[BmCashflowRow] = []
+            for bid_offer in ("bid", "offer"):
+                for r in elexon_bm.fetch_cashflows(d, bid_offer):
+                    rows.append(
+                        BmCashflowRow(
+                            sd=date.fromisoformat(r["settlementDate"]),
+                            sp=r["settlementPeriod"],
+                            national_grid_bm_unit=r["nationalGridBmUnit"],
+                            bid_offer=bid_offer,
+                            total_cashflow=r["totalCashflow"],
+                        )
+                    )
+            upsert_bm_cashflows(conn, rows)
+            log_fetch(conn, BM_CASHFLOW_SERIES, d, ok=True, note=f"ok ({len(rows)} rows)")
+        except Exception as e:  # noqa: BLE001 -- one bad day must not stop the rest
+            log_fetch(conn, BM_CASHFLOW_SERIES, d, ok=False, note=str(e))
+        d += timedelta(days=1)

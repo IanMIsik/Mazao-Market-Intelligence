@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Mazao Energy Data Analytics{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+{% block extra_head %}{% endblock %}
+</head>
+<body>
+
+<div class="appnav">
+  <div class="wrap">
+    <div class="brand">Mazao Consulting <span>/ Energy Data Analytics</span></div>
+    <nav>
+      <a href="/gbpw" class="{{ 'on' if active_nav == 'gbpw' else '' }}">GB Power Weekly</a>
+      <a href="/bess" class="{{ 'on' if active_nav == 'bess' else '' }}">BESS Analytics</a>
+      <a class="soon">Live market<span>soon</span></a>
+      <a class="soon">PPA tools<span>soon</span></a>
+    </nav>
+  </div>
+</div>
+
+<div class="wrap">
+{% block content %}{% endblock %}
+</div>
+
+{% block extra_body %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,300 @@
+{% extends "base.html" %}
+{% block title %}BESS Analytics | Mazao Consulting{% endblock %}
+
+{% block content %}
+
+<header>
+  <div class="brand2">BESS Analytics</div>
+  <div class="stamp num">
+    {% if latest_available %}Data to {{ latest_available.strftime('%a %d %b %Y') }}{% else %}No EAC data ingested yet{% endif %}
+  </div>
+</header>
+
+<h1>Battery participation across ancillary services and the Balancing Mechanism.</h1>
+<p class="byline">The page opens on market-wide totals. Search for a participant below to add them
+and see their own EAC and Balancing Mechanism activity in detail.</p>
+
+<div class="filters">
+  <div class="row">
+    <div class="flabel">Participant</div>
+    <div class="search-wrap">
+      <input class="psearch" type="text" list="participant-datalist" id="psearch"
+        placeholder="Search by participant name&hellip;" autocomplete="off">
+      <datalist id="participant-datalist"></datalist>
+      <span class="phint">{{ summary.participants_active }} participant(s) tracked this window</span>
+    </div>
+  </div>
+  <div class="row" id="pillsrow" hidden>
+    <div class="flabel">Selected</div>
+    <div class="pills" id="pills"></div>
+  </div>
+  <div class="row">
+    <div class="flabel">Service</div>
+    <div class="chips">
+      {% for svc in service_types %}
+      <span class="chip active" data-svc="{{ svc }}">{{ svc }}</span>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="row">
+    <div class="flabel">Window</div>
+    <div class="range">
+      <a href="?window=7" class="{{ 'on' if window == 7 else '' }}">Last 7 days</a>
+      <a href="?window=30" class="{{ 'on' if window == 30 else '' }}">Last 30 days</a>
+      <a href="?window=90" class="{{ 'on' if window == 90 else '' }}">Last 90 days</a>
+    </div>
+  </div>
+</div>
+
+<div class="kpis">
+  <div class="kpi">
+    <div class="k">Total BM revenue, market</div>
+    <div class="v num">£{{ '%.0f'|format(activity.total_revenue_gbp) }} <small>/ {{ window }}d</small></div>
+    <div class="ref num">{{ activity.units_with_capacity + activity.units_without_capacity }} battery BM unit(s)</div>
+  </div>
+  <div class="kpi">
+    <div class="k">Median &pound;/MW/day, market</div>
+    {% if activity.median_gbp_per_mw_day is not none %}
+    <div class="v num">£{{ '%.2f'|format(activity.median_gbp_per_mw_day) }}</div>
+    <div class="ref num">{{ activity.units_with_capacity }} of {{ activity.units_with_capacity + activity.units_without_capacity }} units with known capacity</div>
+    {% else %}
+    <div class="v num">&mdash;</div>
+    <div class="ref num">no matched units have known capacity</div>
+    {% endif %}
+  </div>
+  <div class="kpi">
+    <div class="k">EAC cleared volume, market</div>
+    <div class="v num">{{ '%.0f'|format(summary.by_service_type|sum(attribute='cleared_mw')) }} <small>MW</small></div>
+    <div class="ref num">across {{ service_types|length }} service type(s)</div>
+  </div>
+  <div class="kpi">
+    <div class="k">Participants active</div>
+    <div class="v num">{{ summary.participants_active }}</div>
+    <div class="ref num">cleared at least one EAC service</div>
+  </div>
+</div>
+
+<h2>Market summary &mdash; Enduring Auction Capability</h2>
+<p class="lede">Total cleared volume by service type, across every battery participant. This is the
+default, aggregate view &mdash; it doesn't change size as more participants join the market.</p>
+<hr class="rule">
+{% if summary.by_service_type %}
+{{ market_summary_svg | safe }}
+<div class="legend">
+  {% for svc in service_types %}
+  <span><span class="swatch" style="background:{{ service_type_colors[svc] }}"></span>{{ svc }}</span>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">No EAC data ingested for this window yet. Run <code>gbpw ingest-eac</code> to fetch some.</div>
+{% endif %}
+
+<h2>Balancing Mechanism activity</h2>
+<p class="lede">Real cashflow from Elexon's EBOCF dataset, joined to battery units identified via EAC.
+Cashflow only &mdash; accepted bid/offer volumes (MWh) need a separate ISPSTACK ingest, not built yet.</p>
+<hr class="rule">
+{% if dist.buckets %}
+{{ distribution_svg | safe }}
+<p class="section-note">Distribution of total cleared EAC volume per participant this window.</p>
+{% endif %}
+
+{% if activity.leaderboard %}
+<h3>Top units by &pound;/MW/day</h3>
+{{ leaderboard_svg | safe }}
+<p class="section-note">Ranked by revenue &divide; registered capacity &divide; days &mdash; only units with a known, nonzero capacity in Elexon's reference data are ranked this way.</p>
+{% endif %}
+
+{% if activity.leaderboard_no_capacity %}
+<h3>Units with revenue but unknown capacity</h3>
+<table>
+  <caption>Not ranked by &pound;/MW/day &mdash; Elexon's reference data reports no usable registered capacity for these units.</caption>
+  <thead><tr><th scope="col" style="text-align:left">BM unit</th><th scope="col" style="text-align:left">Lead party</th><th scope="col">Revenue, {{ window }}d</th></tr></thead>
+  <tbody>
+    {% for u in activity.leaderboard_no_capacity %}
+    <tr><th scope="row">{{ u.national_grid_bm_unit }}</th><td style="text-align:left">{{ u.lead_party_name or '—' }}</td><td>£{{ '%.2f'|format(u.total_revenue_gbp) }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if not activity.leaderboard and not activity.leaderboard_no_capacity %}
+<div class="empty-state">No Balancing Mechanism cashflow matched to a battery unit for this window yet. Run <code>gbpw ingest-bm</code> to fetch some.</div>
+{% endif %}
+
+<h2>Selected participants</h2>
+<p class="lede">Full EAC and Balancing Mechanism detail for whichever participants you've searched for above.</p>
+<hr class="rule">
+
+<div id="selected-empty" class="empty-state">
+  No participants selected. Search by participant name above to see their detailed activity here.
+</div>
+
+<div id="selected-detail" hidden>
+  <h3>Ancillary service participation</h3>
+  <table id="tbl-eac">
+    <caption>EAC clearing detail, selected participants</caption>
+    <thead>
+      <tr><th scope="col" style="text-align:left">Participant</th><th scope="col" style="text-align:left">Service</th>
+      <th scope="col" style="text-align:left">Auction unit</th><th scope="col">Cleared volume</th><th scope="col">Cleared price</th></tr>
+    </thead>
+    <tbody id="tbl-eac-body"></tbody>
+  </table>
+
+  <h3>Balancing Mechanism activity</h3>
+  <table id="tbl-bm">
+    <caption>EBOCF cashflow, selected participants' matched BM units, {{ window }}-day window</caption>
+    <thead>
+      <tr><th scope="col" style="text-align:left">BM unit</th><th scope="col">Capacity</th>
+      <th scope="col">Bid cashflow</th><th scope="col">Offer cashflow</th><th scope="col">Total</th><th scope="col">£/MW/day</th></tr>
+    </thead>
+    <tbody id="tbl-bm-body"></tbody>
+  </table>
+</div>
+
+<footer>
+  <strong>Data, assumptions and limits</strong>
+  <dl>
+    <dt>Sources</dt><dd>NESO Enduring Auction Capability results (frequency response, reserve); Elexon EBOCF (Balancing Mechanism cashflow).</dd>
+    <dt>Revenue method</dt><dd>&pound;/MW/day = Balancing Mechanism cashflow (bid + offer) over the window &divide; registered capacity &divide; days in window. Shown only where capacity is known and nonzero. EAC clearing volume/price shown separately, not summed into this figure.</dd>
+    <dt>Accepted volumes</dt><dd>Not yet available for the Balancing Mechanism section &mdash; EBOCF gives cashflow only. Needs a separate ISPSTACK ingest.</dd>
+    <dt>Participant scope</dt><dd>Battery storage units only (NESO technologyType = Batteries), joined to Elexon BM units via the shared national grid BMU code.</dd>
+    <dt>Status</dt><dd>Live data. Balancing Mechanism accepted-volume figures are not yet available &mdash; see above.</dd>
+  </dl>
+</footer>
+
+{% endblock %}
+
+{% block extra_body %}
+<script>
+(function () {
+  var WINDOW = {{ window }};
+  var selected = new Set();
+
+  var input = document.getElementById('psearch');
+  var datalist = document.getElementById('participant-datalist');
+  var pillsEl = document.getElementById('pills');
+  var pillsRow = document.getElementById('pillsrow');
+  var emptyEl = document.getElementById('selected-empty');
+  var detailEl = document.getElementById('selected-detail');
+  var eacBody = document.getElementById('tbl-eac-body');
+  var bmBody = document.getElementById('tbl-bm-body');
+  var svcChips = document.querySelectorAll('.chips .chip[data-svc]');
+  var lastDetail = {};
+
+  function activeServices() {
+    var s = new Set();
+    svcChips.forEach(function (c) { if (c.classList.contains('active')) s.add(c.dataset.svc); });
+    return s;
+  }
+
+  function fmtMoney(v) { return '£' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 2}); }
+  function fmtNum(v) { return Number(v).toLocaleString(undefined, {maximumFractionDigits: 2}); }
+
+  function renderTables() {
+    var services = activeServices();
+    eacBody.innerHTML = '';
+    bmBody.innerHTML = '';
+
+    selected.forEach(function (participant) {
+      var entry = lastDetail[participant];
+      if (!entry) return;
+
+      entry.eac.by_service_type.forEach(function (row) {
+        if (!services.has(row.service_type)) return;
+        var tr = document.createElement('tr');
+        tr.innerHTML =
+          '<th scope="row">' + participant + '</th>' +
+          '<td style="text-align:left"><span class="svc-pill">' + row.service_type + ' / ' + row.auction_product + '</span></td>' +
+          '<td style="text-align:left">' + row.auction_unit + '</td>' +
+          '<td>' + fmtNum(row.cleared_mw) + ' MW</td>' +
+          '<td>' + (row.avg_clearing_price != null ? fmtMoney(row.avg_clearing_price) + '/MW/h' : '—') + '</td>';
+        eacBody.appendChild(tr);
+      });
+
+      Object.keys(entry.bm_units).forEach(function (unit) {
+        var u = entry.bm_units[unit];
+        var tr = document.createElement('tr');
+        tr.innerHTML =
+          '<th scope="row">' + unit + '</th>' +
+          '<td>' + (u.generation_capacity_mw ? fmtNum(u.generation_capacity_mw) + ' MW' : '—') + '</td>' +
+          '<td>' + fmtMoney(u.bid_gbp) + '</td>' +
+          '<td>' + fmtMoney(u.offer_gbp) + '</td>' +
+          '<td class="em">' + fmtMoney(u.total_gbp) + '</td>' +
+          '<td>' + (u.gbp_per_mw_per_day != null ? fmtMoney(u.gbp_per_mw_per_day) : '—') + '</td>';
+        bmBody.appendChild(tr);
+      });
+    });
+  }
+
+  function fetchDetail() {
+    if (selected.size === 0) { lastDetail = {}; renderTables(); return; }
+    var params = new URLSearchParams();
+    selected.forEach(function (p) { params.append('p', p); });
+    params.set('window', WINDOW);
+    fetch('/api/eac/participants/detail?' + params.toString())
+      .then(function (r) { return r.json(); })
+      .then(function (data) { lastDetail = data; renderTables(); });
+  }
+
+  function render() {
+    pillsRow.hidden = selected.size === 0;
+    emptyEl.hidden = selected.size > 0;
+    detailEl.hidden = selected.size === 0;
+
+    pillsEl.innerHTML = '';
+    selected.forEach(function (name) {
+      var pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.textContent = name;
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('aria-label', 'Remove ' + name);
+      btn.textContent = '×';
+      btn.addEventListener('click', function () { selected.delete(name); render(); fetchDetail(); });
+      pill.appendChild(btn);
+      pillsEl.appendChild(pill);
+    });
+
+    fetchDetail();
+  }
+
+  var searchTimer = null;
+  input.addEventListener('input', function () {
+    clearTimeout(searchTimer);
+    var q = input.value.trim();
+    if (q.length < 2) { datalist.innerHTML = ''; return; }
+    searchTimer = setTimeout(function () {
+      fetch('/api/eac/participants/search?q=' + encodeURIComponent(q))
+        .then(function (r) { return r.json(); })
+        .then(function (results) {
+          datalist.innerHTML = results.map(function (r) {
+            return '<option value="' + r.participant + '">';
+          }).join('');
+        });
+    }, 150);
+  });
+
+  function tryAdd(raw) {
+    var name = raw.trim();
+    var known = Array.from(datalist.options).some(function (o) { return o.value === name; });
+    if (!name || !known) return false;
+    selected.add(name);
+    input.value = '';
+    datalist.innerHTML = '';
+    render();
+    return true;
+  }
+
+  input.addEventListener('change', function () { tryAdd(input.value); });
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); tryAdd(input.value); }
+  });
+
+  svcChips.forEach(function (chip) {
+    chip.addEventListener('click', function () { chip.classList.toggle('active'); renderTables(); });
+  });
+
+  render();
+})();
+</script>
+{% endblock %}

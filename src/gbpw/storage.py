@@ -5,6 +5,18 @@ Schema:
     prices(series, sd, sp, run, value, fetched_at)  PK (series, sd, sp, run)
     fetch_log(series, sd, ok, note, ts)
     reports(week_ending, facts_json, narrative, run_basis, built_at, published)
+    eac_results(...)  -- NESO Enduring Auction Capability, see ingest/eac.py
+    bm_unit_reference(national_grid_bm_unit, ...)  -- Elexon BM unit metadata,
+        refreshed wholesale (not date-scoped); national_grid_bm_unit is the
+        same code space as eac_results.auction_unit -- confirmed live -- so
+        a battery's EAC auction_unit joins directly to its Elexon BM data.
+    bm_cashflows(sd, sp, national_grid_bm_unit, bid_offer, total_cashflow, ...)
+        PK (sd, sp, national_grid_bm_unit, bid_offer) -- Elexon EBOCF, real £
+        cashflow per BM unit per settlement period. 'bid' and 'offer' are
+        genuinely different, independently-nonzero data (confirmed live) and
+        both must be fetched and summed for a unit's total BM revenue. This
+        is cashflow only -- no accepted-volume (MWh) data; that needs a
+        separate ISPSTACK ingest, not built yet. See ingest/elexon_bm.py.
 
 Series stored in `prices`:
     day_ahead        -- Elexon Market Index Data, GBP/MWh          (run='NA')
@@ -87,6 +99,26 @@ CREATE TABLE IF NOT EXISTS eac_results (
 CREATE INDEX IF NOT EXISTS idx_eac_sd ON eac_results(sd);
 CREATE INDEX IF NOT EXISTS idx_eac_participant ON eac_results(participant);
 CREATE INDEX IF NOT EXISTS idx_eac_technology ON eac_results(technology_type);
+
+CREATE TABLE IF NOT EXISTS bm_unit_reference (
+    national_grid_bm_unit  TEXT PRIMARY KEY,
+    elexon_bm_unit          TEXT,
+    lead_party_name          TEXT,
+    bm_unit_type              TEXT,
+    generation_capacity_mw    REAL,
+    fetched_at                TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bm_cashflows (
+    sd                      TEXT NOT NULL,
+    sp                      INTEGER NOT NULL,
+    national_grid_bm_unit   TEXT NOT NULL,
+    bid_offer               TEXT NOT NULL,
+    total_cashflow          REAL NOT NULL,
+    fetched_at               TEXT NOT NULL,
+    PRIMARY KEY (sd, sp, national_grid_bm_unit, bid_offer)
+);
+CREATE INDEX IF NOT EXISTS idx_bm_cashflows_bmu ON bm_cashflows(national_grid_bm_unit);
 """
 
 
@@ -115,6 +147,24 @@ class EacRow:
     sd: date
     sp: int
     post_code: str | None
+
+
+@dataclass(frozen=True)
+class BmUnitReferenceRow:
+    national_grid_bm_unit: str
+    elexon_bm_unit: str | None
+    lead_party_name: str | None
+    bm_unit_type: str | None
+    generation_capacity_mw: float | None
+
+
+@dataclass(frozen=True)
+class BmCashflowRow:
+    sd: date
+    sp: int
+    national_grid_bm_unit: str
+    bid_offer: str  # 'bid' | 'offer'
+    total_cashflow: float
 
 
 def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -173,6 +223,57 @@ def upsert_eac_results(conn: sqlite3.Connection, rows: Iterable[EacRow], fetched
             delivery_start = excluded.delivery_start,
             delivery_end = excluded.delivery_end,
             post_code = excluded.post_code,
+            fetched_at = excluded.fetched_at
+        """,
+        data,
+    )
+    conn.commit()
+    return len(data)
+
+
+def upsert_bm_unit_reference(
+    conn: sqlite3.Connection, rows: Iterable[BmUnitReferenceRow], fetched_at: datetime | None = None
+) -> int:
+    fetched_at = fetched_at or datetime.now(timezone.utc)
+    ts = fetched_at.isoformat()
+    data = [
+        (r.national_grid_bm_unit, r.elexon_bm_unit, r.lead_party_name, r.bm_unit_type, r.generation_capacity_mw, ts)
+        for r in rows
+    ]
+    conn.executemany(
+        """
+        INSERT INTO bm_unit_reference (
+            national_grid_bm_unit, elexon_bm_unit, lead_party_name, bm_unit_type,
+            generation_capacity_mw, fetched_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (national_grid_bm_unit) DO UPDATE SET
+            elexon_bm_unit = excluded.elexon_bm_unit,
+            lead_party_name = excluded.lead_party_name,
+            bm_unit_type = excluded.bm_unit_type,
+            generation_capacity_mw = excluded.generation_capacity_mw,
+            fetched_at = excluded.fetched_at
+        """,
+        data,
+    )
+    conn.commit()
+    return len(data)
+
+
+def upsert_bm_cashflows(
+    conn: sqlite3.Connection, rows: Iterable[BmCashflowRow], fetched_at: datetime | None = None
+) -> int:
+    fetched_at = fetched_at or datetime.now(timezone.utc)
+    ts = fetched_at.isoformat()
+    data = [
+        (r.sd.isoformat(), r.sp, r.national_grid_bm_unit, r.bid_offer, r.total_cashflow, ts)
+        for r in rows
+    ]
+    conn.executemany(
+        """
+        INSERT INTO bm_cashflows (sd, sp, national_grid_bm_unit, bid_offer, total_cashflow, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (sd, sp, national_grid_bm_unit, bid_offer) DO UPDATE SET
+            total_cashflow = excluded.total_cashflow,
             fetched_at = excluded.fetched_at
         """,
         data,
@@ -251,6 +352,11 @@ def get_report(conn: sqlite3.Connection, week_ending: date) -> dict | None:
     report = dict(zip(keys, row))
     report["published"] = bool(report["published"])
     return report
+
+
+def latest_report_week(conn: sqlite3.Connection) -> date | None:
+    row = conn.execute("SELECT week_ending FROM reports ORDER BY week_ending DESC LIMIT 1").fetchone()
+    return date.fromisoformat(row[0]) if row else None
 
 
 def mark_published(conn: sqlite3.Connection, week_ending: date, published: bool = True) -> bool:

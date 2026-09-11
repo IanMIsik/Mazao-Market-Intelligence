@@ -1,0 +1,153 @@
+import json
+import sys
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from gbpw.metrics import build_week  # noqa: E402
+from gbpw.settlement import week_dates  # noqa: E402
+from gbpw.storage import EacRow, PriceRow, connect, upsert_eac_results, upsert_prices, upsert_report  # noqa: E402
+from gbpw.web.app import create_app  # noqa: E402
+
+WEEK_ENDING = date(2026, 8, 30)
+EAC_START = date(2026, 9, 8)
+EAC_END = date(2026, 9, 10)
+
+
+def _client(db_path):
+    return TestClient(create_app(db_path=db_path))
+
+
+def _seed_gbpw_report(conn):
+    """Seeds a real week of Elexon-style data and builds real facts via
+    build_week(), rather than hand-writing a facts dict -- avoids drifting
+    out of sync with metrics.py's actual output shape.
+    """
+    dates = week_dates(WEEK_ENDING)
+    for d in dates:
+        rows = []
+        for sp in range(1, 49):
+            rows.append(PriceRow("day_ahead", d, sp, "NA", 50.0))
+            rows.append(PriceRow("imbalance", d, sp, "latest", 55.0))
+            rows.append(PriceRow("wind", d, sp, "NA", 3000.0))
+            rows.append(PriceRow("total_generation", d, sp, "NA", 10000.0))
+            rows.append(PriceRow("demand", d, sp, "NA", 25000.0))
+        upsert_prices(conn, rows)
+
+    facts = build_week(conn, WEEK_ENDING)
+    narrative = {"headline": "Test week headline.", "byline": "Test byline.", "drivers": ["a", "b", "c"]}
+    upsert_report(
+        conn,
+        week_ending=WEEK_ENDING,
+        facts_json=json.dumps(facts),
+        narrative=json.dumps(narrative),
+        run_basis=facts["run_basis"],
+        built_at=datetime.now(timezone.utc),
+    )
+    return facts, narrative
+
+
+def _eac_row(**overrides):
+    base = dict(
+        neso_id=1, unit_result_id="u1", service_type="Response", auction_product="DCL",
+        technology_type="Batteries", auction_unit="AUNIT01", participant="Alpha Energy",
+        executed_quantity=10.0, clearing_price=5.0,
+        delivery_start="2026-09-08T00:00:00", delivery_end="2026-09-08T00:30:00",
+        sd=EAC_START, sp=1, post_code=None,
+    )
+    base.update(overrides)
+    return EacRow(**base)
+
+
+def test_bess_page_loads_with_seeded_data(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    upsert_eac_results(conn, [_eac_row()])
+    client = _client(tmp_path / "test.db")
+    r = client.get("/bess")
+    assert r.status_code == 200
+    assert "BESS Analytics" in r.text
+    assert "Alpha Energy" not in r.text  # not a participant name shown on the aggregate page by default
+
+
+def test_bess_page_empty_state_when_no_eac_data(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/bess")
+    assert r.status_code == 200
+    assert "No EAC data ingested" in r.text
+    assert "No Balancing Mechanism cashflow matched" in r.text
+
+
+def test_gbpw_weekly_page_renders_from_stored_report(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    _seed_gbpw_report(conn)
+    client = _client(tmp_path / "test.db")
+    r = client.get(f"/gbpw/{WEEK_ENDING.isoformat()}")
+    assert r.status_code == 200
+    assert "Test week headline." in r.text
+
+
+def test_gbpw_latest_redirects_to_stored_week(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    _seed_gbpw_report(conn)
+    client = _client(tmp_path / "test.db")
+    r = client.get("/gbpw", follow_redirects=False)
+    assert r.status_code in (302, 307)
+    assert r.headers["location"].endswith(WEEK_ENDING.isoformat())
+
+
+def test_gbpw_404_for_unknown_week(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/gbpw/2099-01-01")
+    assert r.status_code == 404
+
+
+def test_gbpw_422_for_malformed_week_ending(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/gbpw/not-a-date")
+    assert r.status_code == 422
+
+
+def test_participant_search_api_returns_matching_json(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    upsert_eac_results(conn, [
+        _eac_row(neso_id=1, participant="Alpha Energy"),
+        _eac_row(neso_id=2, participant="Beta Storage", auction_unit="AUNIT02"),
+    ])
+    client = _client(tmp_path / "test.db")
+    r = client.get("/api/eac/participants/search", params={"q": "alpha"})
+    assert r.status_code == 200
+    assert r.json() == [{"participant": "Alpha Energy"}]
+
+
+def test_participant_detail_api_handles_multiple_p_params(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    upsert_eac_results(conn, [
+        _eac_row(neso_id=1, participant="Alpha Energy", auction_unit="AUNIT01"),
+        _eac_row(neso_id=2, participant="Beta Storage", auction_unit="AUNIT02"),
+    ])
+    client = _client(tmp_path / "test.db")
+    r = client.get("/api/eac/participants/detail", params=[("p", "Alpha Energy"), ("p", "Beta Storage"), ("window", 7)])
+    assert r.status_code == 200
+    data = r.json()
+    assert set(data.keys()) == {"Alpha Energy", "Beta Storage"}
+    assert data["Alpha Energy"]["eac"]["total_cleared_mw"] == 10.0
+
+
+def test_index_redirects_to_bess(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code in (302, 307)
+    assert r.headers["location"] == "/bess"
