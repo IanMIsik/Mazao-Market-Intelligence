@@ -49,18 +49,18 @@ and see their own EAC and Balancing Mechanism activity in detail.</p>
 <div class="kpis">
   <div class="kpi">
     <div class="k">Total BM revenue, market</div>
-    <div class="v num">£{{ '%.0f'|format(activity.total_revenue_gbp) }} <small>/ {{ window }}d</small></div>
+    <div class="v num">£{{ activity.total_revenue_gbp|commas }} <small>/ {{ window }}d</small></div>
     <div class="ref num">{{ activity.units_with_capacity + activity.units_without_capacity }} battery BM unit(s)</div>
   </div>
   <div class="kpi">
     <div class="k">Offer / bid revenue, market</div>
-    <div class="v2 num">£{{ '%.0f'|format(activity.total_offer_revenue_gbp) }} <small>offer</small></div>
-    <div class="v2 num">£{{ '%.0f'|format(activity.total_bid_revenue_gbp) }} <small>bid</small></div>
+    <div class="v2 num">£{{ activity.total_offer_revenue_gbp|commas }} <small>offer</small></div>
+    <div class="v2 num">£{{ activity.total_bid_revenue_gbp|commas }} <small>bid</small></div>
   </div>
   <div class="kpi">
     <div class="k">Median &pound;/MW/day, market</div>
     {% if activity.median_gbp_per_mw_day is not none %}
-    <div class="v num">£{{ '%.2f'|format(activity.median_gbp_per_mw_day) }}</div>
+    <div class="v num">£{{ activity.median_gbp_per_mw_day|commas(2) }}</div>
     <div class="ref num">{{ activity.units_with_capacity }} of {{ activity.units_with_capacity + activity.units_without_capacity }} units with known capacity</div>
     {% else %}
     <div class="v num">&mdash;</div>
@@ -69,7 +69,7 @@ and see their own EAC and Balancing Mechanism activity in detail.</p>
   </div>
   <div class="kpi">
     <div class="k">EAC cleared volume, market</div>
-    <div class="v num">{{ '%.0f'|format(summary.by_service_type|sum(attribute='cleared_mw')) }} <small>MW</small></div>
+    <div class="v num">{{ summary.by_service_type|sum(attribute='cleared_mw')|commas }} <small>MW</small></div>
     <div class="ref num">across {{ service_types|length }} service type(s)</div>
   </div>
   <div class="kpi">
@@ -116,7 +116,7 @@ Cashflow only &mdash; accepted bid/offer volumes (MWh) need a separate ISPSTACK 
   <thead><tr><th scope="col" style="text-align:left">BM unit</th><th scope="col" style="text-align:left">Lead party</th><th scope="col">Revenue, {{ window }}d</th></tr></thead>
   <tbody>
     {% for u in activity.leaderboard_no_capacity %}
-    <tr><th scope="row">{{ u.national_grid_bm_unit }}</th><td style="text-align:left">{{ u.lead_party_name or '—' }}</td><td>£{{ '%.2f'|format(u.total_revenue_gbp) }}</td></tr>
+    <tr><th scope="row">{{ u.national_grid_bm_unit }}</th><td style="text-align:left">{{ u.lead_party_name or '—' }}</td><td>£{{ u.total_revenue_gbp|commas(2) }}</td></tr>
     {% endfor %}
   </tbody>
 </table>

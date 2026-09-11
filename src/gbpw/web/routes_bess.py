@@ -24,6 +24,9 @@ router = APIRouter()
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+# Jinja's built-in '%.0f'|format has no thousands-separator equivalent --
+# every large number on this page (MW volumes, £ revenue) needs one.
+templates.env.filters["commas"] = lambda v, decimals=0: f"{v:,.{decimals}f}"
 
 
 def _window_dates(db: sqlite3.Connection, window: int) -> tuple[date, date]:
