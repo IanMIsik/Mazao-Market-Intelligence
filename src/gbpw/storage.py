@@ -65,6 +65,28 @@ CREATE TABLE IF NOT EXISTS reports (
     built_at     TEXT NOT NULL,
     published    INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS eac_results (
+    neso_id            INTEGER NOT NULL,
+    unit_result_id     TEXT,
+    service_type       TEXT NOT NULL,
+    auction_product    TEXT NOT NULL,
+    technology_type    TEXT,
+    auction_unit       TEXT NOT NULL,
+    participant        TEXT NOT NULL,
+    executed_quantity  REAL,
+    clearing_price     REAL,
+    delivery_start     TEXT NOT NULL,
+    delivery_end       TEXT NOT NULL,
+    sd                 TEXT NOT NULL,
+    sp                 INTEGER NOT NULL,
+    post_code          TEXT,
+    fetched_at         TEXT NOT NULL,
+    PRIMARY KEY (neso_id, sd, sp)
+);
+CREATE INDEX IF NOT EXISTS idx_eac_sd ON eac_results(sd);
+CREATE INDEX IF NOT EXISTS idx_eac_participant ON eac_results(participant);
+CREATE INDEX IF NOT EXISTS idx_eac_technology ON eac_results(technology_type);
 """
 
 
@@ -75,6 +97,24 @@ class PriceRow:
     sp: int
     run: str
     value: float
+
+
+@dataclass(frozen=True)
+class EacRow:
+    neso_id: int
+    unit_result_id: str | None
+    service_type: str
+    auction_product: str
+    technology_type: str | None
+    auction_unit: str
+    participant: str
+    executed_quantity: float | None
+    clearing_price: float | None
+    delivery_start: str  # local (Europe/London) ISO datetime, naive
+    delivery_end: str
+    sd: date
+    sp: int
+    post_code: str | None
 
 
 def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -95,6 +135,44 @@ def upsert_prices(conn: sqlite3.Connection, rows: Iterable[PriceRow], fetched_at
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT (series, sd, sp, run) DO UPDATE SET
             value = excluded.value,
+            fetched_at = excluded.fetched_at
+        """,
+        data,
+    )
+    conn.commit()
+    return len(data)
+
+
+def upsert_eac_results(conn: sqlite3.Connection, rows: Iterable[EacRow], fetched_at: datetime | None = None) -> int:
+    fetched_at = fetched_at or datetime.now(timezone.utc)
+    ts = fetched_at.isoformat()
+    data = [
+        (
+            r.neso_id, r.unit_result_id, r.service_type, r.auction_product, r.technology_type,
+            r.auction_unit, r.participant, r.executed_quantity, r.clearing_price,
+            r.delivery_start, r.delivery_end, r.sd.isoformat(), r.sp, r.post_code, ts,
+        )
+        for r in rows
+    ]
+    conn.executemany(
+        """
+        INSERT INTO eac_results (
+            neso_id, unit_result_id, service_type, auction_product, technology_type,
+            auction_unit, participant, executed_quantity, clearing_price,
+            delivery_start, delivery_end, sd, sp, post_code, fetched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (neso_id, sd, sp) DO UPDATE SET
+            unit_result_id = excluded.unit_result_id,
+            service_type = excluded.service_type,
+            auction_product = excluded.auction_product,
+            technology_type = excluded.technology_type,
+            auction_unit = excluded.auction_unit,
+            participant = excluded.participant,
+            executed_quantity = excluded.executed_quantity,
+            clearing_price = excluded.clearing_price,
+            delivery_start = excluded.delivery_start,
+            delivery_end = excluded.delivery_end,
+            post_code = excluded.post_code,
             fetched_at = excluded.fetched_at
         """,
         data,

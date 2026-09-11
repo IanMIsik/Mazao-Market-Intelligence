@@ -1,15 +1,22 @@
 """
 Command-line entry point tying ingest / narrative / render / publish together.
 
-    gbpw ingest  --week-ending 2026-08-30 [--history-days 37]
-    gbpw build   --week-ending 2026-08-30 --out out/gbpw-2026-08-30.html [--regenerate]
-    gbpw publish --week-ending 2026-08-30
-    gbpw status  --week-ending 2026-08-30
-    gbpw run     [--week-ending auto] [--out-dir out] [--regenerate]
+    gbpw ingest     --week-ending 2026-08-30 [--history-days 37]
+    gbpw ingest-eac --start 2026-08-01 --end 2026-09-11 [--technology Batteries]
+    gbpw build      --week-ending 2026-08-30 --out out/gbpw-2026-08-30.html [--regenerate]
+    gbpw publish    --week-ending 2026-08-30
+    gbpw status     --week-ending 2026-08-30
+    gbpw run        [--week-ending auto] [--out-dir out] [--regenerate]
 
 `run` is the one-shot form meant for a scheduler: ingest the trailing window
 then build, writing to <out-dir>/gbpw-<week-ending>.html. `--week-ending auto`
 resolves to the most recently completed week (the Sunday on or before today).
+
+`ingest-eac` is independent of the weekly report cycle -- it pulls NESO's
+Enduring Auction Capability results for an arbitrary date range (chunked and
+resumable internally, see ingest/__init__.py:ingest_eac_range), for the
+BESS Analytics page rather than GB Power Weekly. A full 2-3 year backfill
+and a short recent window use the same command, just a wider --start/--end.
 """
 
 from __future__ import annotations
@@ -21,7 +28,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from .build import build_report, publish_report
-from .ingest import ingest_week
+from .ingest import ingest_eac_range, ingest_week
 from .metrics import IncompleteWeekError, build_week
 from .settlement import week_dates
 from .storage import DEFAULT_DB_PATH, connect, get_report
@@ -131,6 +138,12 @@ def main(argv: list[str] | None = None) -> None:
     p_status.add_argument("--history-days", type=int, default=37)
     p_status.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
+    p_eac = sub.add_parser("ingest-eac", help="fetch and store NESO EAC results for a date range")
+    p_eac.add_argument("--start", type=date.fromisoformat, required=True)
+    p_eac.add_argument("--end", type=date.fromisoformat, required=True)
+    p_eac.add_argument("--technology", default=None, help="e.g. Batteries -- omit to fetch every technology type")
+    p_eac.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+
     p_run = sub.add_parser("run", help="ingest + build in one step, for a scheduler")
     p_run.add_argument("--week-ending", type=_week_ending_or_auto, default="auto")
     p_run.add_argument("--out-dir", type=Path, default=Path("out"))
@@ -163,6 +176,29 @@ def main(argv: list[str] | None = None) -> None:
         else:
             print(f"No report on file for week ending {args.week_ending} -- run `build` first.")
             sys.exit(1)
+
+    elif args.command == "ingest-eac":
+        n_days = (args.end - args.start).days + 1
+        tech = args.technology or "all technologies"
+        print(f"Ingesting EAC results for {n_days} day(s): {args.start}..{args.end} ({tech})")
+        ingest_eac_range(conn, args.start, args.end, technology_type=args.technology)
+        dates = [args.start + timedelta(days=i) for i in range(n_days)]
+        sd_list = [d.isoformat() for d in dates]
+        placeholders = ",".join("?" for _ in sd_list)
+        failures = conn.execute(
+            f"SELECT sd, note FROM fetch_log WHERE series = 'eac' AND ok = 0 AND sd IN ({placeholders}) "
+            f"AND ts = (SELECT MAX(ts) FROM fetch_log f2 WHERE f2.series = 'eac' AND f2.sd = fetch_log.sd)",
+            sd_list,
+        ).fetchall()
+        if failures:
+            print(f"Done, with failures covering {len(failures)} day(s):")
+            for sd, note in failures:
+                print(f"  {sd}: {note}")
+            sys.exit(1)
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM eac_results WHERE sd IN ({placeholders})", sd_list
+        ).fetchone()[0]
+        print(f"Done, no failures. {count:,} row(s) on file for this range.")
 
     elif args.command == "status":
         healthy = _print_status(conn, args.week_ending, args.history_days)

@@ -54,6 +54,21 @@ def utc_to_settlement(dt_utc: datetime) -> tuple[date, int]:
     return d, sp
 
 
+def local_to_settlement(local_dt: datetime) -> tuple[date, int]:
+    """(settlement date, period) for a naive local (Europe/London) wall-clock instant.
+
+    For sources that already report local civil time directly -- e.g. NESO's
+    Enduring Auction Capability delivery blocks -- rather than UTC. Settlement
+    period is derived straight from the local hour/minute; correct on normal
+    days. On the one day a year the clocks go back, the repeated local hour
+    (01:00-02:00 happening twice) can't be told apart from wall-clock time
+    alone, so both occurrences land on the same nominal period -- a narrow,
+    twice-a-year-at-most edge case, not handled.
+    """
+    sp = local_dt.hour * 2 + local_dt.minute // 30 + 1
+    return local_dt.date(), sp
+
+
 def week_dates(week_ending: date) -> list[date]:
     """The 7 local dates Mon..Sun for the week ending on `week_ending` (a Sunday)."""
     if week_ending.weekday() != 6:

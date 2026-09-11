@@ -1,12 +1,18 @@
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from gbpw.settlement import periods_in_date, sp_start_utc, utc_to_settlement, week_dates  # noqa: E402
+from gbpw.settlement import (  # noqa: E402
+    local_to_settlement,
+    periods_in_date,
+    sp_start_utc,
+    utc_to_settlement,
+    week_dates,
+)
 
 
 def test_normal_day_has_48_periods():
@@ -82,3 +88,20 @@ def test_week_dates_returns_monday_through_sunday():
 def test_week_dates_rejects_non_sunday():
     with pytest.raises(ValueError):
         week_dates(date(2026, 8, 29))  # a Saturday
+
+
+def test_local_to_settlement_midnight_is_sp1():
+    assert local_to_settlement(datetime(2026, 9, 5, 0, 0)) == (date(2026, 9, 5), 1)
+
+
+def test_local_to_settlement_matches_known_efa_block_boundary():
+    # A live-sampled Response record: deliveryStart local 06:00 -> SP13.
+    assert local_to_settlement(datetime(2026, 9, 11, 6, 0)) == (date(2026, 9, 11), 13)
+
+
+def test_local_to_settlement_half_hour_offset():
+    assert local_to_settlement(datetime(2026, 9, 5, 15, 30)) == (date(2026, 9, 5), 32)
+
+
+def test_local_to_settlement_last_period_of_day():
+    assert local_to_settlement(datetime(2026, 9, 5, 23, 30)) == (date(2026, 9, 5), 48)
