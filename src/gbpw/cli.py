@@ -38,9 +38,15 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from .build import build_report, publish_report
-from .ingest import ingest_bm_cashflows_range, ingest_bmu_reference, ingest_eac_range, ingest_week
+from .ingest import (
+    history_range as _history_range,
+    ingest_bm_cashflows_range,
+    ingest_bmu_reference,
+    ingest_eac_range,
+    ingest_week,
+)
 from .metrics import IncompleteWeekError, build_week
-from .settlement import week_dates
+from .settlement import most_recent_sunday as _most_recent_sunday
 from .storage import DEFAULT_DB_PATH, connect, get_report
 
 logger = logging.getLogger("gbpw.cli")
@@ -53,21 +59,10 @@ def _week_ending(s: str) -> date:
     return d
 
 
-def _most_recent_sunday(today: date) -> date:
-    days_since_sunday = (today.weekday() + 1) % 7
-    return today - timedelta(days=days_since_sunday)
-
-
 def _week_ending_or_auto(s: str) -> date | str:
     if s == "auto":
         return "auto"
     return _week_ending(s)
-
-
-def _history_range(week_ending: date, history_days: int) -> list[date]:
-    dates = week_dates(week_ending)
-    history_start = dates[0] - timedelta(days=history_days)
-    return [history_start + timedelta(days=n) for n in range((dates[-1] - history_start).days + 1)]
 
 
 def _fetch_failures(conn, dates: list[date]) -> list[tuple]:

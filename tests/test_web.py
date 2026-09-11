@@ -144,6 +144,50 @@ def test_gbpw_422_for_malformed_week_ending(tmp_path):
     assert r.status_code == 422
 
 
+def test_gbpw_new_form_renders(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/gbpw/new")
+    assert r.status_code == 200
+    assert "Build report" in r.text
+
+
+def test_gbpw_new_form_prefills_week_ending_from_query(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/gbpw/new?week_ending=2026-08-23")
+    assert 'value="2026-08-23"' in r.text
+
+
+def test_gbpw_build_rejects_malformed_date_without_ingesting(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/gbpw/build?week_ending=not-a-date")
+    assert r.status_code == 200  # re-renders the form, doesn't redirect
+    assert "isn&#39;t a valid date" in r.text or "isn't a valid date" in r.text
+
+
+def test_gbpw_build_rejects_non_sunday(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/gbpw/build?week_ending=2026-08-25")  # a Tuesday
+    assert r.status_code == 200
+    assert "Sunday" in r.text
+
+
+def test_gbpw_build_rejects_future_week(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/gbpw/build?week_ending=2099-01-04")  # a Sunday, far in the future
+    assert r.status_code == 200
+    assert "hasn&#39;t finished yet" in r.text or "hasn't finished yet" in r.text
+
+
 def test_participant_search_api_returns_matching_json(tmp_path):
     conn = connect(tmp_path / "test.db")
     upsert_eac_results(conn, [

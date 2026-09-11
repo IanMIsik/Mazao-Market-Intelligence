@@ -4,6 +4,7 @@ import sqlite3
 from datetime import date, timedelta
 
 from . import eac, elexon, elexon_bm
+from ..settlement import week_dates
 from ..storage import (
     BmCashflowRow,
     BmUnitReferenceRow,
@@ -60,9 +61,20 @@ def ingest_day(conn: sqlite3.Connection, d: date) -> None:
         log_fetch(conn, "demand", d, ok=False, note=str(e))
 
 
-def ingest_week(conn: sqlite3.Connection, week_dates: list[date]) -> None:
-    for d in week_dates:
+def ingest_week(conn: sqlite3.Connection, dates: list[date]) -> None:
+    for d in dates:
         ingest_day(conn, d)
+
+
+def history_range(week_ending: date, history_days: int) -> list[date]:
+    """The target week's 7 dates plus `history_days` of trailing context
+    (needed for the 30-day median spread figure -- see metrics.py). Shared
+    by cli.py's `ingest`/`run`/`status` commands and the web `/gbpw/build`
+    route so both build the exact same window for a given week.
+    """
+    dates = week_dates(week_ending)
+    history_start = dates[0] - timedelta(days=history_days)
+    return [history_start + timedelta(days=n) for n in range((dates[-1] - history_start).days + 1)]
 
 
 def ingest_eac_range(

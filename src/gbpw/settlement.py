@@ -74,3 +74,13 @@ def week_dates(week_ending: date) -> list[date]:
     if week_ending.weekday() != 6:
         raise ValueError(f"week_ending must be a Sunday, got {week_ending} ({week_ending.strftime('%A')})")
     return [week_ending - timedelta(days=6 - i) for i in range(7)]
+
+
+def most_recent_sunday(today: date) -> date:
+    """The Sunday on or before `today` -- the most recently *completed*
+    week-ending, used to auto-pick a week (`gbpw run --week-ending auto`)
+    and to reject an in-progress or future week before wasting an ingest
+    attempt on data that can't exist yet.
+    """
+    days_since_sunday = (today.weekday() + 1) % 7
+    return today - timedelta(days=days_since_sunday)

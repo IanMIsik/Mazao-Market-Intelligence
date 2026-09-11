@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Build a report | GB Power Weekly | Mazao Consulting{% endblock %}
+
+{% block content %}
+
+<header>
+  <div class="brand2">GB Power Weekly</div>
+  {% if latest_available %}<div class="stamp num">Latest report: {{ latest_available.strftime('%a %d %b %Y') }}</div>{% endif %}
+</header>
+
+<h1>Build a report for another week.</h1>
+<p class="byline">Pick any past Sunday and this fetches real Elexon data for that week (plus 37 days of
+trailing history, for the 30-day median spread figure) and builds the report from it. Ingest and build
+run for real against Elexon's API, so this can take a minute or two &mdash; the page will redirect to
+the finished report when it's done.</p>
+
+{% if error %}
+<div class="form-error">{{ error }}</div>
+{% endif %}
+
+<form class="buildform" method="get" action="/gbpw/build">
+  <div class="row">
+    <div>
+      <label for="week_ending">Week ending (a Sunday)</label>
+      <input type="date" id="week_ending" name="week_ending" required
+        value="{{ week_ending_str or '' }}" max="{{ max_date.isoformat() }}">
+    </div>
+    <button class="btn" type="submit">Build report</button>
+  </div>
+  <p class="hint">GB Power Weekly runs Monday&ndash;Sunday, so week-ending must fall on a Sunday, and can't be
+  later than {{ max_date.strftime('%a %d %b %Y') }} (the most recently completed week).</p>
+</form>
+
+{% if latest_available %}
+<p class="hint" style="margin-top:22px"><a href="/gbpw">&larr; Back to the latest report</a></p>
+{% endif %}
+
+{% endblock %}

@@ -14,6 +14,22 @@ rather than linked, so it can't collide with or be affected by the report's
 own stylesheet) right after <body>, wrapped in @media print so it's absent
 from anything printed/exported from this page and from the CLI-generated
 file (the report's own stylesheet already has an @media print block).
+
+The "Download PDF" button in that same nav bar is plain window.print() --
+not a server-rendered file. The report's stylesheet already has a real
+@media print block (built for exactly this "send to clients" use case), and
+every browser's print dialog offers "Save as PDF" as a destination, so this
+gets a genuine PDF with zero new dependencies. A server-side renderer
+(WeasyPrint/Playwright) would need either native system libraries or a
+bundled browser download -- not worth it while print-to-PDF already covers
+the same output faithfully (same stylesheet, same @media print rules).
+
+/gbpw/new and /gbpw/build (an on-demand "ingest + build this past week"
+pair, backing the "build a report for a week that isn't in the reports
+table yet" flow) are registered ahead of /gbpw/{week_ending} -- FastAPI
+matches path params as plain strings before validating them as a `date`,
+so if {week_ending} were registered first it would swallow "new"/"build"
+as literal path segments and 422 rather than ever reaching these routes.
 """
 
 from __future__ import annotations
@@ -21,15 +37,24 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import date, datetime
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
 
+from ..build import build_report
+from ..ingest import history_range, ingest_week
+from ..metrics import IncompleteWeekError
 from ..render.render import render_week
+from ..settlement import most_recent_sunday
 from ..storage import get_report, latest_report_week, list_report_weeks
 from .deps import get_db
 
 router = APIRouter()
+
+TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 _WEB_NAV_CSS = """
 <style>
@@ -46,10 +71,16 @@ _WEB_NAV_CSS = """
   .webnav-appnav nav a.soon span { font-size:10.5px; margin-left:5px; border:1px solid #45577A; padding:1px 5px;
     border-radius:8px; color:#8FA0BC; }
   .webnav-appnav nav a:not(.soon):not(.on):hover { color:#fff; }
-  .webnav-weekpick { margin-left:auto; display:flex; align-items:center; gap:8px; }
+  .webnav-tools { margin-left:auto; display:flex; align-items:center; gap:14px; }
+  .webnav-weekpick { display:flex; align-items:center; gap:8px; }
   .webnav-weekpick label { color:#8FA0BC; font-size:12px; }
   .webnav-weekpick select { background:#16305A; color:#fff; border:1px solid #2B4B73; border-radius:4px;
     font:13px -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; padding:5px 8px; }
+  .webnav-newlink { color:#B9C6DA; text-decoration:none; font-size:13px; white-space:nowrap; }
+  .webnav-newlink:hover { color:#fff; }
+  .webnav-pdfbtn { background:#16305A; color:#fff; border:1px solid #2B4B73; border-radius:4px;
+    font:13px -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; padding:5px 10px; cursor:pointer; }
+  .webnav-pdfbtn:hover { background:#2B4B73; }
 </style>
 """
 
@@ -65,12 +96,12 @@ def _week_nav_bar(weeks: list[dict], current: date) -> str:
     picker = ""
     if len(weeks) > 1:
         picker = f"""
-    <div class="webnav-weekpick">
-      <label for="webnav-week-select">Report</label>
-      <select id="webnav-week-select" onchange="location.href='/gbpw/' + this.value">
-        {"".join(options)}
-      </select>
-    </div>"""
+      <div class="webnav-weekpick">
+        <label for="webnav-week-select">Report</label>
+        <select id="webnav-week-select" onchange="location.href='/gbpw/' + this.value">
+          {"".join(options)}
+        </select>
+      </div>"""
     return f"""{_WEB_NAV_CSS}
 <div class="webnav-appnav">
   <div class="webnav-wrap">
@@ -80,7 +111,11 @@ def _week_nav_bar(weeks: list[dict], current: date) -> str:
       <a href="/bess">BESS Analytics</a>
       <a class="soon">Live market<span>soon</span></a>
       <a class="soon">PPA tools<span>soon</span></a>
-    </nav>{picker}
+    </nav>
+    <div class="webnav-tools">
+      <a class="webnav-newlink" href="/gbpw/new">+ Build report for another week</a>
+      <button class="webnav-pdfbtn" type="button" onclick="window.print()">Download PDF</button>{picker}
+    </div>
   </div>
 </div>
 """
@@ -94,15 +129,79 @@ def _with_web_nav(html: str, weeks: list[dict], current: date) -> str:
 def latest(db: sqlite3.Connection = Depends(get_db)):
     week = latest_report_week(db)
     if week is None:
-        raise HTTPException(404, "No GB Power Weekly report has been built yet.")
+        raise HTTPException(404, "No GB Power Weekly report has been built yet. Visit /gbpw/new to build one.")
     return RedirectResponse(url=f"/gbpw/{week.isoformat()}")
+
+
+def _new_report_form(request: Request, db: sqlite3.Connection, error: str | None, week_ending_str: str | None):
+    return templates.TemplateResponse(
+        request,
+        "gbpw_new.html",
+        {
+            "request": request,
+            "active_nav": "gbpw",
+            "latest_available": latest_report_week(db),
+            "max_date": most_recent_sunday(date.today()),
+            "error": error,
+            "week_ending_str": week_ending_str,
+        },
+    )
+
+
+@router.get("/gbpw/new", response_class=HTMLResponse)
+def new_report_form(request: Request, week_ending: str | None = None, db: sqlite3.Connection = Depends(get_db)):
+    return _new_report_form(request, db, error=None, week_ending_str=week_ending)
+
+
+@router.get("/gbpw/build", response_class=HTMLResponse)
+def build_report_route(request: Request, week_ending: str, db: sqlite3.Connection = Depends(get_db)):
+    """Ingests the target week (plus 37 days of trailing history) live from
+    Elexon and builds the report, exactly like `gbpw run --week-ending
+    <date>` -- synchronous, so this request blocks for as long as the real
+    Elexon fetches take (can be a minute or two for a fresh week).
+    """
+    try:
+        parsed = date.fromisoformat(week_ending)
+    except ValueError:
+        return _new_report_form(request, db, f"'{week_ending}' isn't a valid date (expected YYYY-MM-DD).", week_ending)
+
+    max_date = most_recent_sunday(date.today())
+    if parsed > max_date:
+        return _new_report_form(
+            request, db,
+            f"{parsed.strftime('%a %d %b %Y')} hasn't finished yet -- the most recently completed "
+            f"week ends {max_date.strftime('%a %d %b %Y')}.",
+            week_ending,
+        )
+
+    try:
+        dates = history_range(parsed, 37)
+    except ValueError as e:
+        return _new_report_form(request, db, str(e), week_ending)
+
+    ingest_week(db, dates)
+    out_path = Path("out") / f"gbpw-{parsed.isoformat()}.html"
+    try:
+        build_report(db, parsed, out_path)
+    except IncompleteWeekError as e:
+        return _new_report_form(
+            request, db,
+            f"Couldn't build week ending {parsed.isoformat()} -- Elexon's data for it looks incomplete:\n{e}",
+            week_ending,
+        )
+
+    return RedirectResponse(url=f"/gbpw/{parsed.isoformat()}", status_code=303)
 
 
 @router.get("/gbpw/{week_ending}")
 def weekly(week_ending: date, db: sqlite3.Connection = Depends(get_db)):
     report = get_report(db, week_ending)
     if report is None:
-        raise HTTPException(404, f"No report on file for week ending {week_ending.isoformat()}.")
+        raise HTTPException(
+            404,
+            f"No report on file for week ending {week_ending.isoformat()}. "
+            f"Visit /gbpw/new?week_ending={week_ending.isoformat()} to build it.",
+        )
     html = render_week(
         json.loads(report["facts_json"]),
         json.loads(report["narrative"]),
