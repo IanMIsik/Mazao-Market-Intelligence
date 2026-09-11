@@ -18,16 +18,16 @@ the finished report when it's done.</p>
 <div class="form-error">{{ error }}</div>
 {% endif %}
 
-<form class="buildform" method="get" action="/gbpw/build">
+<form class="buildform" method="get" action="/gbpw/build" id="buildform">
   <div class="row">
     <div>
       <label for="week_ending">Week ending (a Sunday)</label>
       <input type="date" id="week_ending" name="week_ending" required
         value="{{ week_ending_str or '' }}" max="{{ max_date.isoformat() }}">
     </div>
-    <button class="btn" type="submit">Build report</button>
+    <button class="btn" type="submit" id="buildbtn">Build report</button>
   </div>
-  <p class="hint">GB Power Weekly runs Monday&ndash;Sunday, so week-ending must fall on a Sunday, and can't be
+  <p class="hint" id="buildhint">GB Power Weekly runs Monday&ndash;Sunday, so week-ending must fall on a Sunday, and can't be
   later than {{ max_date.strftime('%a %d %b %Y') }} (the most recently completed week).</p>
 </form>
 
@@ -35,4 +35,24 @@ the finished report when it's done.</p>
 <p class="hint" style="margin-top:22px"><a href="/gbpw">&larr; Back to the latest report</a></p>
 {% endif %}
 
+{% endblock %}
+
+{% block extra_body %}
+<script>
+// This is a plain GET form -- a real full-page navigation, not fetch/AJAX
+// -- so the browser doesn't unload this page until the /gbpw/build
+// response starts arriving, which can take a few minutes (real Elexon
+// ingest, not simulated). Without this, that whole wait looks identical
+// to the page just doing nothing -- confirmed live: a user has no way to
+// tell "still working" from "broken" during that window.
+document.getElementById('buildform').addEventListener('submit', function (e) {
+  if (!e.target.checkValidity()) return; // let native validation block/prompt as usual
+  var btn = document.getElementById('buildbtn');
+  btn.disabled = true;
+  btn.textContent = 'Building…';
+  document.getElementById('buildhint').textContent =
+    'Fetching real data from Elexon and building the report -- this can take a few minutes. ' +
+    'Please keep this tab open; it will redirect automatically when done.';
+});
+</script>
 {% endblock %}
