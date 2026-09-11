@@ -31,6 +31,14 @@ a 3-day sample) -- never divide by it blindly. gbp_per_mw_per_day is None
 whenever capacity is unknown or zero; callers must show that honestly
 ("capacity not available"), never a fabricated ratio and never a unit
 silently dropped.
+
+gbp_per_mw_per_day (and the leaderboard it ranks) is computed from OFFER
+revenue only, not net (offer+bid) -- per the user's explicit direction: an
+accepted bid means the unit was paid to turn DOWN, which is a cost against
+volume that was likely already sold elsewhere (e.g. day-ahead), not
+incremental BM revenue. total_revenue_gbp (net) is still reported alongside
+it for the units where £/MW/day can't be computed, so nothing is hidden --
+it's just not what the ratio and the ranking are based on.
 """
 
 from __future__ import annotations
@@ -97,9 +105,10 @@ def bm_activity(
 
     entries = []
     for entry in by_unit.values():
-        total = entry["bid_revenue_gbp"] + entry["offer_revenue_gbp"]
-        entry["total_revenue_gbp"] = total
-        entry["gbp_per_mw_per_day"] = _gbp_per_mw_per_day(total, entry["generation_capacity_mw"], days)
+        entry["total_revenue_gbp"] = entry["bid_revenue_gbp"] + entry["offer_revenue_gbp"]
+        entry["gbp_per_mw_per_day"] = _gbp_per_mw_per_day(
+            entry["offer_revenue_gbp"], entry["generation_capacity_mw"], days
+        )
         entries.append(entry)
 
     with_capacity = [e for e in entries if e["gbp_per_mw_per_day"] is not None]
@@ -108,9 +117,9 @@ def bm_activity(
     without_capacity.sort(key=lambda e: e["total_revenue_gbp"], reverse=True)
 
     return {
-        "total_revenue_gbp": sum(e["total_revenue_gbp"] for e in entries),
+        "total_revenue_gbp": sum(e["total_revenue_gbp"] for e in entries),  # net, bid+offer
         "total_bid_revenue_gbp": sum(e["bid_revenue_gbp"] for e in entries),
-        "total_offer_revenue_gbp": sum(e["offer_revenue_gbp"] for e in entries),
+        "total_offer_revenue_gbp": sum(e["offer_revenue_gbp"] for e in entries),  # the "Total BM revenue" KPI basis
         "units_with_capacity": len(with_capacity),
         "units_without_capacity": len(without_capacity),
         "median_gbp_per_mw_day": _median(e["gbp_per_mw_per_day"] for e in with_capacity),
@@ -161,6 +170,8 @@ def unit_detail(conn: sqlite3.Connection, national_grid_bm_units: list[str], sta
 
     for entry in out.values():
         entry["total_revenue_gbp"] = entry["bid_revenue_gbp"] + entry["offer_revenue_gbp"]
-        entry["gbp_per_mw_per_day"] = _gbp_per_mw_per_day(entry["total_revenue_gbp"], entry["generation_capacity_mw"], days)
+        entry["gbp_per_mw_per_day"] = _gbp_per_mw_per_day(
+            entry["offer_revenue_gbp"], entry["generation_capacity_mw"], days
+        )
 
     return out

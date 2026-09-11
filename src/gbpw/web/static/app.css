@@ -91,9 +91,11 @@ h3 { font-size:13.5px; color:var(--navy); margin:26px 0 4px; font-weight:600; }
 svg { display:block; width:100%; height:auto; }
 .ax { font-family:var(--sans); font-size:12px; fill:var(--muted); font-variant-numeric:tabular-nums; }
 .ax.sm { font-size:10.5px; }
+.ax.unit { fill:var(--navy-mid); font-weight:600; }
 .rankbar { fill:var(--signal); opacity:.85; }
 .histbar { fill:var(--navy-mid); }
 .axline { stroke:var(--rule); stroke-width:1; }
+.grid { stroke:var(--rule-soft); stroke-width:1; }
 .legend { display:flex; gap:20px; font-size:12.5px; color:var(--muted); margin:10px 0 0; flex-wrap:wrap; }
 .swatch { display:inline-block; width:11px; height:11px; vertical-align:middle; margin-right:6px; border-radius:2px; }
 .legend span { margin-right:20px; }

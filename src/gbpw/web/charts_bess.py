@@ -12,6 +12,7 @@ order is simpler than generating CSS classes to match.
 
 from __future__ import annotations
 
+import math
 from html import escape
 
 PALETTE = ["var(--navy)", "var(--navy-mid)", "var(--wind)", "var(--demand)", "var(--signal)"]
@@ -21,21 +22,56 @@ def service_type_colors(service_types: list[str]) -> dict[str, str]:
     return {svc: PALETTE[i % len(PALETTE)] for i, svc in enumerate(service_types)}
 
 
+def _nice_axis(max_val: float, target_ticks: int = 5) -> tuple[float, float]:
+    """Pick a round axis max and step (a 1/2/2.5/5 x 10^n 'nice number')
+    giving ~target_ticks gridlines above max_val. Same idea as
+    render/charts.py's _nice_axis, generalized to any magnitude since
+    cleared MW totals here range from tens to millions depending on window
+    and service type -- not reused directly since that one is hardcoded to
+    a handful of £/MWh-sized steps.
+    """
+    if max_val <= 0:
+        return 10.0, 2.0
+    raw_step = max_val / target_ticks
+    magnitude = 10 ** math.floor(math.log10(raw_step))
+    step = magnitude
+    for m in (1, 2, 2.5, 5, 10):
+        step = m * magnitude
+        if step >= raw_step:
+            break
+    ticks = math.ceil(max_val / step)
+    return step * ticks, step
+
+
 def market_summary_bars_svg(by_service_type: list[dict]) -> str:
-    """Horizontal bar per service_type, total cleared MW."""
+    """Horizontal bar per service_type, total cleared MW, against a shared
+    MW axis scale (gridlines + tick labels) so bar lengths are calibrated
+    to real MW values, not just proportional to the tallest bar.
+    """
     if not by_service_type:
         return ""
     colors = service_type_colors([r["service_type"] for r in by_service_type])
     max_val = max(r["cleared_mw"] for r in by_service_type) or 1.0
+    axis_max, step = _nice_axis(max_val)
 
     x0, max_w, row_h, bar_h, top = 190, 650, 46, 26, 16
-    height = top * 2 + len(by_service_type) * row_h
+    plot_bottom = top + len(by_service_type) * row_h
+    height = plot_bottom + 34
     parts = [f'<svg viewBox="0 0 900 {height}" role="img" '
-             f'aria-label="Total cleared MW by service type" preserveAspectRatio="xMidYMid meet">']
+             f'aria-label="Total cleared MW by service type, with MW axis scale" preserveAspectRatio="xMidYMid meet">']
+
+    n_ticks = int(round(axis_max / step))
+    ticks = [step * k for k in range(0, n_ticks + 1)]
+    for t in ticks:
+        gx = x0 + (t / axis_max) * max_w
+        parts.append(f'<line class="grid" x1="{gx:.1f}" x2="{gx:.1f}" y1="{top-4}" y2="{plot_bottom}"/>')
+        parts.append(f'<text class="ax sm" x="{gx:.1f}" y="{plot_bottom+16}" text-anchor="middle">{t:,.0f}</text>')
+    parts.append(f'<text class="ax unit sm" x="{x0+max_w+10:.1f}" y="{plot_bottom+16}" text-anchor="start">MW</text>')
+
     for i, r in enumerate(by_service_type):
         y = top + i * row_h
         cy = y + bar_h / 2
-        w = (r["cleared_mw"] / max_val) * max_w
+        w = (r["cleared_mw"] / axis_max) * max_w
         label = escape(r["service_type"])
         color = colors[r["service_type"]]
         parts.append(f'<text class="ax" x="{x0-12}" y="{cy+4:.1f}" text-anchor="end">{label}</text>')

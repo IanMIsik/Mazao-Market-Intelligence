@@ -114,7 +114,9 @@ def test_gbp_per_mw_per_day_computed_when_capacity_known(tmp_path):
     activity = bm_metrics.bm_activity(conn, START, END)
     aunit01 = next(e for e in activity["leaderboard"] if e["national_grid_bm_unit"] == "AUNIT01")
     days = (END - START).days + 1
-    assert aunit01["gbp_per_mw_per_day"] == 8.0 / 10.0 / days
+    # Offer-only, not net (offer 10.0, bid -2.0 excluded -- a bid is a cost
+    # to turn down, not incremental BM revenue).
+    assert aunit01["gbp_per_mw_per_day"] == 10.0 / 10.0 / days
 
 
 def test_units_with_and_without_capacity_counts(tmp_path):
@@ -131,8 +133,9 @@ def test_median_gbp_per_mw_day_uses_only_units_with_known_capacity(tmp_path):
     _seed(conn)
     activity = bm_metrics.bm_activity(conn, START, END)
     # Only AUNIT01 has known capacity in this fixture -- median of one value is that value.
+    # Offer-only (10.0), not net -- see test_gbp_per_mw_per_day_computed_when_capacity_known.
     days = (END - START).days + 1
-    assert activity["median_gbp_per_mw_day"] == 8.0 / 10.0 / days
+    assert activity["median_gbp_per_mw_day"] == 10.0 / 10.0 / days
 
 
 def test_unit_detail_includes_units_with_no_cashflow_at_all(tmp_path):
@@ -144,6 +147,8 @@ def test_unit_detail_includes_units_with_no_cashflow_at_all(tmp_path):
     assert detail["AUNIT03"]["gbp_per_mw_per_day"] is None
     assert detail["AUNIT01"]["bid_revenue_gbp"] == -2.0
     assert detail["AUNIT01"]["offer_revenue_gbp"] == 10.0
+    days = (END - START).days + 1
+    assert detail["AUNIT01"]["gbp_per_mw_per_day"] == 10.0 / 10.0 / days  # offer-only, not net
 
 
 def test_empty_range_returns_zeros_not_error(tmp_path):

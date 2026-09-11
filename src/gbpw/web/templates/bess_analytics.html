@@ -49,19 +49,19 @@ and see their own EAC and Balancing Mechanism activity in detail.</p>
 <div class="kpis">
   <div class="kpi">
     <div class="k">Total BM revenue, market</div>
-    <div class="v num">£{{ activity.total_revenue_gbp|commas }} <small>/ {{ window }}d</small></div>
-    <div class="ref num">{{ activity.units_with_capacity + activity.units_without_capacity }} battery BM unit(s)</div>
+    <div class="v num">£{{ activity.total_offer_revenue_gbp|commas }} <small>/ {{ window }}d</small></div>
+    <div class="ref num">offer revenue only &middot; {{ activity.units_with_capacity + activity.units_without_capacity }} battery BM unit(s)</div>
   </div>
   <div class="kpi">
     <div class="k">Offer / bid revenue, market</div>
     <div class="v2 num">£{{ activity.total_offer_revenue_gbp|commas }} <small>offer</small></div>
-    <div class="v2 num">£{{ activity.total_bid_revenue_gbp|commas }} <small>bid</small></div>
+    <div class="v2 num">£{{ activity.total_bid_revenue_gbp|commas }} <small>bid, excluded above</small></div>
   </div>
   <div class="kpi">
     <div class="k">Median &pound;/MW/day, market</div>
     {% if activity.median_gbp_per_mw_day is not none %}
     <div class="v num">£{{ activity.median_gbp_per_mw_day|commas(2) }}</div>
-    <div class="ref num">{{ activity.units_with_capacity }} of {{ activity.units_with_capacity + activity.units_without_capacity }} units with known capacity</div>
+    <div class="ref num">offer revenue only &middot; {{ activity.units_with_capacity }} of {{ activity.units_with_capacity + activity.units_without_capacity }} units with known capacity</div>
     {% else %}
     <div class="v num">&mdash;</div>
     <div class="ref num">no matched units have known capacity</div>
@@ -106,17 +106,17 @@ Cashflow only &mdash; accepted bid/offer volumes (MWh) need a separate ISPSTACK 
 {% if activity.leaderboard %}
 <h3>Top units by &pound;/MW/day</h3>
 {{ leaderboard_svg | safe }}
-<p class="section-note">Ranked by revenue &divide; registered capacity &divide; days &mdash; only units with a known, nonzero capacity in Elexon's reference data are ranked this way.</p>
+<p class="section-note">Ranked by offer revenue &divide; registered capacity &divide; days (bid revenue excluded &mdash; see Revenue method below) &mdash; only units with a known, nonzero capacity in Elexon's reference data are ranked this way.</p>
 {% endif %}
 
 {% if activity.leaderboard_no_capacity %}
 <h3>Units with revenue but unknown capacity</h3>
 <table>
   <caption>Not ranked by &pound;/MW/day &mdash; Elexon's reference data reports no usable registered capacity for these units.</caption>
-  <thead><tr><th scope="col" style="text-align:left">BM unit</th><th scope="col" style="text-align:left">Lead party</th><th scope="col">Revenue, {{ window }}d</th></tr></thead>
+  <thead><tr><th scope="col" style="text-align:left">BM unit</th><th scope="col" style="text-align:left">Lead party</th><th scope="col">Offer revenue, {{ window }}d</th></tr></thead>
   <tbody>
     {% for u in activity.leaderboard_no_capacity %}
-    <tr><th scope="row">{{ u.national_grid_bm_unit }}</th><td style="text-align:left">{{ u.lead_party_name or '—' }}</td><td>£{{ u.total_revenue_gbp|commas(2) }}</td></tr>
+    <tr><th scope="row">{{ u.national_grid_bm_unit }}</th><td style="text-align:left">{{ u.lead_party_name or '—' }}</td><td>£{{ u.offer_revenue_gbp|commas(2) }}</td></tr>
     {% endfor %}
   </tbody>
 </table>
@@ -160,7 +160,7 @@ Cashflow only &mdash; accepted bid/offer volumes (MWh) need a separate ISPSTACK 
   <strong>Data, assumptions and limits</strong>
   <dl>
     <dt>Sources</dt><dd>NESO Enduring Auction Capability results (frequency response, reserve); Elexon EBOCF (Balancing Mechanism cashflow).</dd>
-    <dt>Revenue method</dt><dd>Total BM revenue = sum of every matched battery unit's Balancing Mechanism cashflow (offer cashflow plus bid cashflow) over the window. An accepted offer is a unit instructed to increase output (or reduce demand) and is normally a positive cashflow; an accepted bid is a unit instructed to decrease output (or increase demand), and is frequently negative since it can represent a payment made by the unit rather than to it. A negative net total is a real, expected market outcome, not a computation error. &pound;/MW/day = that net figure &divide; registered capacity &divide; days in window, shown only where capacity is known and nonzero. EAC clearing volume/price shown separately, not summed into this figure.</dd>
+    <dt>Revenue method</dt><dd>Total BM revenue and &pound;/MW/day count <strong>offer</strong> cashflow only &mdash; sum of every matched battery unit's accepted-offer cashflow over the window, &divide; registered capacity &divide; days for the &pound;/MW/day figure, shown only where capacity is known and nonzero. An accepted offer is a unit instructed to increase output (or reduce demand): genuine incremental BM revenue. An accepted bid is a unit instructed to decrease output (or increase demand) &mdash; a payment the unit makes to National Grid, not revenue, since that volume was normally already sold elsewhere (e.g. day-ahead). Bid cashflow is shown separately (see "Offer / bid revenue" above) for transparency but excluded from these two figures. EAC clearing volume/price shown separately, not summed into this figure.</dd>
     <dt>Accepted volumes</dt><dd>Not yet available for the Balancing Mechanism section &mdash; EBOCF gives cashflow only. Needs a separate ISPSTACK ingest.</dd>
     <dt>Participant scope</dt><dd>Battery storage units only (NESO technologyType = Batteries), joined to Elexon BM units via the shared national grid BMU code.</dd>
     <dt>Status</dt><dd>Live data. Balancing Mechanism accepted-volume figures are not yet available &mdash; see above.</dd>
@@ -224,9 +224,9 @@ Cashflow only &mdash; accepted bid/offer volumes (MWh) need a separate ISPSTACK 
         tr.innerHTML =
           '<th scope="row">' + unit + '</th>' +
           '<td>' + (u.generation_capacity_mw ? fmtNum(u.generation_capacity_mw) + ' MW' : '—') + '</td>' +
-          '<td>' + fmtMoney(u.bid_gbp) + '</td>' +
-          '<td>' + fmtMoney(u.offer_gbp) + '</td>' +
-          '<td class="em">' + fmtMoney(u.total_gbp) + '</td>' +
+          '<td>' + fmtMoney(u.bid_revenue_gbp) + '</td>' +
+          '<td>' + fmtMoney(u.offer_revenue_gbp) + '</td>' +
+          '<td class="em">' + fmtMoney(u.total_revenue_gbp) + '</td>' +
           '<td>' + (u.gbp_per_mw_per_day != null ? fmtMoney(u.gbp_per_mw_per_day) : '—') + '</td>';
         bmBody.appendChild(tr);
       });
