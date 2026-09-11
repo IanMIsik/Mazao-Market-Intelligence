@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -267,9 +268,19 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "serve":
         import uvicorn
 
-        from .web.app import create_app
+        if args.reload:
+            # --reload spawns a subprocess that re-imports the app, so it
+            # needs an import string rather than an app instance; the db
+            # path crosses that boundary via an env var (see
+            # web/app.py:create_app_from_env).
+            from .web.app import DB_PATH_ENV_VAR
 
-        uvicorn.run(create_app(db_path=args.db), host=args.host, port=args.port, reload=args.reload)
+            os.environ[DB_PATH_ENV_VAR] = str(args.db)
+            uvicorn.run("gbpw.web.app:create_app_from_env", factory=True, host=args.host, port=args.port, reload=True)
+        else:
+            from .web.app import create_app
+
+            uvicorn.run(create_app(db_path=args.db), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
     {
       "name": "gbpw-web",
       "runtimeExecutable": "C:\\Users\\USER\\AppData\\Local\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\python.exe",
-      "runtimeArgs": ["-m", "gbpw.cli", "serve", "--port", "5000"],
+      "runtimeArgs": ["-m", "gbpw.cli", "serve", "--port", "5000", "--reload"],
       "port": 5000
     }
   ]

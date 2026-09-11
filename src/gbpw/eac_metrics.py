@@ -39,6 +39,14 @@ def latest_available_date(conn: sqlite3.Connection, technology_type: str | None 
     return date.fromisoformat(row[0]) if row and row[0] else None
 
 
+def earliest_available_date(conn: sqlite3.Connection, technology_type: str | None = DEFAULT_TECHNOLOGY) -> date | None:
+    if technology_type is None:
+        row = conn.execute("SELECT MIN(sd) FROM eac_results").fetchone()
+    else:
+        row = conn.execute("SELECT MIN(sd) FROM eac_results WHERE technology_type = ?", (technology_type,)).fetchone()
+    return date.fromisoformat(row[0]) if row and row[0] else None
+
+
 def market_summary(
     conn: sqlite3.Connection, start: date, end: date, technology_type: str | None = DEFAULT_TECHNOLOGY
 ) -> dict:

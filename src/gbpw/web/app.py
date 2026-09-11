@@ -7,6 +7,7 @@ template extending base.html, and a nav-link flip in base.html itself.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -18,6 +19,8 @@ from . import routes_bess, routes_gbpw
 from .deps import get_db, make_get_db
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+DB_PATH_ENV_VAR = "GBPW_DB_PATH"
 
 
 def create_app(db_path: Path = DEFAULT_DB_PATH) -> FastAPI:
@@ -32,3 +35,14 @@ def create_app(db_path: Path = DEFAULT_DB_PATH) -> FastAPI:
         return RedirectResponse(url="/bess")
 
     return app
+
+
+def create_app_from_env() -> FastAPI:
+    """Factory entrypoint for uvicorn's --reload mode, which spawns a fresh
+    subprocess that re-imports this module and can't take Python arguments
+    directly -- it needs an "module:factory" import string instead (see
+    cli.py's `serve` command). The db path crosses that boundary via an env
+    var, set by `serve` before invoking uvicorn.
+    """
+    db_path = os.environ.get(DB_PATH_ENV_VAR)
+    return create_app(Path(db_path) if db_path else DEFAULT_DB_PATH)
