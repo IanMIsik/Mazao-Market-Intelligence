@@ -60,13 +60,23 @@ def market_summary_bars_svg(by_service_type: list[dict]) -> str:
     parts = [f'<svg viewBox="0 0 900 {height}" role="img" '
              f'aria-label="Total cleared MW by service type, with MW axis scale" preserveAspectRatio="xMidYMid meet">']
 
+    # "MW" sits once, top-right above the plot area (same placement idea as
+    # the GB Power Weekly hero chart's "£/MWh" label) -- not inline after
+    # the last tick number, which overlapped it once axis_max ran into the
+    # millions (a 7-8 digit tick label like "8,000,000" is wide enough to
+    # collide with anything placed right after it on the same baseline).
+    parts.append(f'<text class="ax unit sm" x="{x0+max_w:.1f}" y="{top-6}" text-anchor="end">MW</text>')
+
     n_ticks = int(round(axis_max / step))
     ticks = [step * k for k in range(0, n_ticks + 1)]
-    for t in ticks:
+    for i, t in enumerate(ticks):
         gx = x0 + (t / axis_max) * max_w
+        # The last tick would otherwise center itself half off the right
+        # edge of the axis; anchoring it to "end" keeps it fully inside
+        # the plot area instead of overhanging into empty margin.
+        anchor = "end" if i == len(ticks) - 1 else "middle"
         parts.append(f'<line class="grid" x1="{gx:.1f}" x2="{gx:.1f}" y1="{top-4}" y2="{plot_bottom}"/>')
-        parts.append(f'<text class="ax sm" x="{gx:.1f}" y="{plot_bottom+16}" text-anchor="middle">{t:,.0f}</text>')
-    parts.append(f'<text class="ax unit sm" x="{x0+max_w+10:.1f}" y="{plot_bottom+16}" text-anchor="start">MW</text>')
+        parts.append(f'<text class="ax sm" x="{gx:.1f}" y="{plot_bottom+16}" text-anchor="{anchor}">{t:,.0f}</text>')
 
     for i, r in enumerate(by_service_type):
         y = top + i * row_h
