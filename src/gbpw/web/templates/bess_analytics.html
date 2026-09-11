@@ -44,20 +44,13 @@ and see their own EAC and Balancing Mechanism activity in detail.</p>
       <a href="?window=90" class="{{ 'on' if window == 90 else '' }}">Last 90 days</a>
     </div>
   </div>
-  {% if window_exceeds_data %}
-  <div class="row">
-    <div class="flabel">&nbsp;</div>
-    <div class="phint">Only {{ days_available }} day(s) of data are ingested so far ({{ earliest_available.strftime('%d %b') }}&ndash;{{ latest_available.strftime('%d %b %Y') }}) &mdash;
-    the {{ window }}-day window you've selected covers the same data as a shorter one until more is backfilled.</div>
-  </div>
-  {% endif %}
 </div>
 
 <div class="kpis">
   <div class="kpi">
-    <div class="k">Net BM cashflow, market</div>
+    <div class="k">Total BM revenue, market</div>
     <div class="v num">£{{ '%.0f'|format(activity.total_revenue_gbp) }} <small>/ {{ window }}d</small></div>
-    <div class="ref num">offer £{{ '%.0f'|format(activity.total_offer_revenue_gbp) }} &middot; bid £{{ '%.0f'|format(activity.total_bid_revenue_gbp) }}</div>
+    <div class="ref num">{{ activity.units_with_capacity + activity.units_without_capacity }} battery BM unit(s)</div>
   </div>
   <div class="kpi">
     <div class="k">Median &pound;/MW/day, market</div>
@@ -108,32 +101,17 @@ Cashflow only &mdash; accepted bid/offer volumes (MWh) need a separate ISPSTACK 
 {% if activity.leaderboard %}
 <h3>Top units by &pound;/MW/day</h3>
 {{ leaderboard_svg | safe }}
-<p class="section-note">Ranked by net revenue (offer cashflow plus bid cashflow) &divide; registered capacity &divide; days &mdash; only units with a known, nonzero capacity in Elexon's reference data are ranked this way. Bid cashflow is often negative by nature: it's what a unit is paid (or pays) to reduce output, not to increase it.</p>
-<table>
-  <caption>Bid/offer breakdown for the units charted above</caption>
-  <thead><tr><th scope="col" style="text-align:left">BM unit</th><th scope="col" style="text-align:left">Lead party</th>
-  <th scope="col">Offer</th><th scope="col">Bid</th><th scope="col">Net, {{ window }}d</th><th scope="col">£/MW/day</th></tr></thead>
-  <tbody>
-    {% for u in activity.leaderboard %}
-    <tr><th scope="row">{{ u.national_grid_bm_unit }}</th><td style="text-align:left">{{ u.lead_party_name or '—' }}</td>
-    <td>£{{ '%.2f'|format(u.offer_revenue_gbp) }}</td><td>£{{ '%.2f'|format(u.bid_revenue_gbp) }}</td>
-    <td class="em">£{{ '%.2f'|format(u.total_revenue_gbp) }}</td><td>£{{ '%.2f'|format(u.gbp_per_mw_per_day) }}</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+<p class="section-note">Ranked by revenue &divide; registered capacity &divide; days &mdash; only units with a known, nonzero capacity in Elexon's reference data are ranked this way.</p>
 {% endif %}
 
 {% if activity.leaderboard_no_capacity %}
 <h3>Units with revenue but unknown capacity</h3>
 <table>
   <caption>Not ranked by &pound;/MW/day &mdash; Elexon's reference data reports no usable registered capacity for these units.</caption>
-  <thead><tr><th scope="col" style="text-align:left">BM unit</th><th scope="col" style="text-align:left">Lead party</th>
-  <th scope="col">Offer</th><th scope="col">Bid</th><th scope="col">Net, {{ window }}d</th></tr></thead>
+  <thead><tr><th scope="col" style="text-align:left">BM unit</th><th scope="col" style="text-align:left">Lead party</th><th scope="col">Revenue, {{ window }}d</th></tr></thead>
   <tbody>
     {% for u in activity.leaderboard_no_capacity %}
-    <tr><th scope="row">{{ u.national_grid_bm_unit }}</th><td style="text-align:left">{{ u.lead_party_name or '—' }}</td>
-    <td>£{{ '%.2f'|format(u.offer_revenue_gbp) }}</td><td>£{{ '%.2f'|format(u.bid_revenue_gbp) }}</td>
-    <td class="em">£{{ '%.2f'|format(u.total_revenue_gbp) }}</td></tr>
+    <tr><th scope="row">{{ u.national_grid_bm_unit }}</th><td style="text-align:left">{{ u.lead_party_name or '—' }}</td><td>£{{ '%.2f'|format(u.total_revenue_gbp) }}</td></tr>
     {% endfor %}
   </tbody>
 </table>
@@ -167,7 +145,7 @@ Cashflow only &mdash; accepted bid/offer volumes (MWh) need a separate ISPSTACK 
     <caption>EBOCF cashflow, selected participants' matched BM units, {{ window }}-day window</caption>
     <thead>
       <tr><th scope="col" style="text-align:left">BM unit</th><th scope="col">Capacity</th>
-      <th scope="col">Offer</th><th scope="col">Bid</th><th scope="col">Net</th><th scope="col">£/MW/day</th></tr>
+      <th scope="col">Bid cashflow</th><th scope="col">Offer cashflow</th><th scope="col">Total</th><th scope="col">£/MW/day</th></tr>
     </thead>
     <tbody id="tbl-bm-body"></tbody>
   </table>
@@ -177,9 +155,8 @@ Cashflow only &mdash; accepted bid/offer volumes (MWh) need a separate ISPSTACK 
   <strong>Data, assumptions and limits</strong>
   <dl>
     <dt>Sources</dt><dd>NESO Enduring Auction Capability results (frequency response, reserve); Elexon EBOCF (Balancing Mechanism cashflow).</dd>
-    <dt>Bid vs. offer</dt><dd>An accepted offer is a unit instructed to increase output (or reduce demand) -- its cashflow is normally positive. An accepted bid is a unit instructed to decrease output (or increase demand) -- its cashflow is frequently negative, since it can represent a payment made by the unit rather than to it. Net revenue is offer cashflow plus bid cashflow; a negative net figure is a real, expected market outcome, not a computation error. Every figure on this page shows the two separately.</dd>
-    <dt>Revenue method</dt><dd>&pound;/MW/day = net Balancing Mechanism cashflow over the window &divide; registered capacity &divide; days in window. Shown only where capacity is known and nonzero. EAC clearing volume/price shown separately, not summed into this figure.</dd>
-    <dt>Accepted volumes</dt><dd>Not yet available for the Balancing Mechanism section &mdash; EBOCF gives cashflow only, not accepted MWh. Needs a separate ISPSTACK ingest.</dd>
+    <dt>Revenue method</dt><dd>&pound;/MW/day = Balancing Mechanism cashflow (bid + offer) over the window &divide; registered capacity &divide; days in window. Shown only where capacity is known and nonzero. EAC clearing volume/price shown separately, not summed into this figure.</dd>
+    <dt>Accepted volumes</dt><dd>Not yet available for the Balancing Mechanism section &mdash; EBOCF gives cashflow only. Needs a separate ISPSTACK ingest.</dd>
     <dt>Participant scope</dt><dd>Battery storage units only (NESO technologyType = Batteries), joined to Elexon BM units via the shared national grid BMU code.</dd>
     <dt>Status</dt><dd>Live data. Balancing Mechanism accepted-volume figures are not yet available &mdash; see above.</dd>
   </dl>
@@ -242,9 +219,9 @@ Cashflow only &mdash; accepted bid/offer volumes (MWh) need a separate ISPSTACK 
         tr.innerHTML =
           '<th scope="row">' + unit + '</th>' +
           '<td>' + (u.generation_capacity_mw ? fmtNum(u.generation_capacity_mw) + ' MW' : '—') + '</td>' +
-          '<td>' + fmtMoney(u.offer_revenue_gbp) + '</td>' +
-          '<td>' + fmtMoney(u.bid_revenue_gbp) + '</td>' +
-          '<td class="em">' + fmtMoney(u.total_revenue_gbp) + '</td>' +
+          '<td>' + fmtMoney(u.bid_gbp) + '</td>' +
+          '<td>' + fmtMoney(u.offer_gbp) + '</td>' +
+          '<td class="em">' + fmtMoney(u.total_gbp) + '</td>' +
           '<td>' + (u.gbp_per_mw_per_day != null ? fmtMoney(u.gbp_per_mw_per_day) : '—') + '</td>';
         bmBody.appendChild(tr);
       });

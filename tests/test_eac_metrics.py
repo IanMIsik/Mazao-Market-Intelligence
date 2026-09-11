@@ -140,11 +140,3 @@ def test_latest_available_date(tmp_path):
     _seed(conn)
     assert eac_metrics.latest_available_date(conn) == END
     assert eac_metrics.latest_available_date(conn, technology_type="Wind") == START
-
-
-def test_earliest_available_date(tmp_path):
-    conn = connect(tmp_path / "test.db")
-    assert eac_metrics.earliest_available_date(conn) is None
-    _seed(conn)
-    assert eac_metrics.earliest_available_date(conn) == START
-    assert eac_metrics.earliest_available_date(conn, technology_type="Wind") == START

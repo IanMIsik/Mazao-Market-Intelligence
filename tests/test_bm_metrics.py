@@ -112,20 +112,6 @@ def test_units_with_and_without_capacity_counts(tmp_path):
     assert activity["total_revenue_gbp"] == 13.0  # 8.0 (AUNIT01) + 5.0 (AUNIT02)
 
 
-def test_bid_and_offer_revenue_kept_separate_not_just_netted(tmp_path):
-    conn = connect(tmp_path / "test.db")
-    _seed(conn)
-    activity = bm_metrics.bm_activity(conn, START, END)
-    assert activity["total_bid_revenue_gbp"] == -2.0
-    assert activity["total_offer_revenue_gbp"] == 15.0  # 10.0 (AUNIT01) + 5.0 (AUNIT02)
-    aunit01 = next(e for e in activity["leaderboard"] if e["national_grid_bm_unit"] == "AUNIT01")
-    assert aunit01["bid_revenue_gbp"] == -2.0
-    assert aunit01["offer_revenue_gbp"] == 10.0
-    aunit02 = next(e for e in activity["leaderboard_no_capacity"] if e["national_grid_bm_unit"] == "AUNIT02")
-    assert aunit02["bid_revenue_gbp"] == 0.0
-    assert aunit02["offer_revenue_gbp"] == 5.0
-
-
 def test_median_gbp_per_mw_day_uses_only_units_with_known_capacity(tmp_path):
     conn = connect(tmp_path / "test.db")
     _seed(conn)
@@ -140,10 +126,10 @@ def test_unit_detail_includes_units_with_no_cashflow_at_all(tmp_path):
     _seed(conn)
     detail = bm_metrics.unit_detail(conn, ["AUNIT01", "AUNIT02", "AUNIT03"], START, END)
     assert set(detail.keys()) == {"AUNIT01", "AUNIT02", "AUNIT03"}
-    assert detail["AUNIT03"]["total_revenue_gbp"] == 0.0
+    assert detail["AUNIT03"]["total_gbp"] == 0.0
     assert detail["AUNIT03"]["gbp_per_mw_per_day"] is None
-    assert detail["AUNIT01"]["bid_revenue_gbp"] == -2.0
-    assert detail["AUNIT01"]["offer_revenue_gbp"] == 10.0
+    assert detail["AUNIT01"]["bid_gbp"] == -2.0
+    assert detail["AUNIT01"]["offer_gbp"] == 10.0
 
 
 def test_empty_range_returns_zeros_not_error(tmp_path):

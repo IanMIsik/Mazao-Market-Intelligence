@@ -7,11 +7,13 @@ serves immediately.
 The document itself (render_week()'s output) is NOT wrapped in the app-shell
 -- it's a clean, printable, "send to clients" artifact, and `build.py`'s CLI
 path writes that exact same string straight to a `.html` file for that
-purpose. But someone reaching this page by clicking through the web app has
-no way back without one, so this route injects a thin, print-hidden strip
-right after <body> -- present when viewed here, gone from the CLI-generated
-file and from anything printed/exported from this page (the report's own
-stylesheet already has an @media print block).
+purpose. But someone reaching this page by clicking through the web app
+needs the same navigation the rest of the app has, so this route injects
+the full app nav bar (same markup/CSS as base.html's .appnav, inlined here
+rather than linked, so it can't collide with or be affected by the report's
+own stylesheet) right after <body>, wrapped in @media print so it's absent
+from anything printed/exported from this page and from the CLI-generated
+file (the report's own stylesheet already has an @media print block).
 """
 
 from __future__ import annotations
@@ -31,13 +33,31 @@ router = APIRouter()
 
 _WEB_NAV_BAR = """
 <style>
-  .webnav-bar { background:#10294A; color:#B9C6DA; font:13px -apple-system,"Segoe UI",Roboto,Arial,sans-serif;
-    padding:8px 28px; }
-  .webnav-bar a { color:#fff; text-decoration:none; }
-  .webnav-bar a:hover { text-decoration:underline; }
-  @media print { .webnav-bar { display:none; } }
+  @media print { .webnav-appnav { display:none; } }
+  .webnav-appnav { background:#10294A; font:13.5px -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; }
+  .webnav-appnav .webnav-wrap { display:flex; align-items:center; gap:28px; padding:0 28px; max-width:1060px; margin:0 auto; }
+  .webnav-appnav .webnav-brand { font-weight:700; color:#fff; letter-spacing:.01em; font-size:15px; padding:14px 0; }
+  .webnav-appnav .webnav-brand span { font-weight:400; color:#B9C6DA; }
+  .webnav-appnav nav { display:flex; gap:2px; }
+  .webnav-appnav nav a { display:block; padding:16px 14px; color:#B9C6DA; text-decoration:none; font-size:13.5px;
+    border-bottom:2px solid transparent; }
+  .webnav-appnav nav a.on { color:#fff; border-bottom-color:#B04A39; font-weight:600; }
+  .webnav-appnav nav a.soon { color:#5E7291; cursor:default; }
+  .webnav-appnav nav a.soon span { font-size:10.5px; margin-left:5px; border:1px solid #45577A; padding:1px 5px;
+    border-radius:8px; color:#8FA0BC; }
+  .webnav-appnav nav a:not(.soon):not(.on):hover { color:#fff; }
 </style>
-<div class="webnav-bar">&larr; <a href="/bess">Back to BESS Analytics</a></div>
+<div class="webnav-appnav">
+  <div class="webnav-wrap">
+    <div class="webnav-brand">Mazao Consulting <span>/ Energy Data Analytics</span></div>
+    <nav>
+      <a href="/gbpw" class="on">GB Power Weekly</a>
+      <a href="/bess">BESS Analytics</a>
+      <a class="soon">Live market<span>soon</span></a>
+      <a class="soon">PPA tools<span>soon</span></a>
+    </nav>
+  </div>
+</div>
 """
 
 

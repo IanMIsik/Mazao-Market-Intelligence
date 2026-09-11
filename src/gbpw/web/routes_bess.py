@@ -40,20 +40,13 @@ def bess_page(request: Request, window: int = 7, db: sqlite3.Connection = Depend
     dist = eac_metrics.distribution(db, start, end)
     activity = bm_metrics.bm_activity(db, start, end)
 
-    earliest = eac_metrics.earliest_available_date(db)
-    latest = eac_metrics.latest_available_date(db)
-    days_available = (latest - earliest).days + 1 if earliest and latest else 0
-
     context = {
         "request": request,
         "active_nav": "bess",
         "window": window,
         "start": start,
         "end": end,
-        "latest_available": latest,
-        "earliest_available": earliest,
-        "days_available": days_available,
-        "window_exceeds_data": days_available > 0 and window > days_available,
+        "latest_available": eac_metrics.latest_available_date(db),
         "summary": summary,
         "dist": dist,
         "activity": activity,
