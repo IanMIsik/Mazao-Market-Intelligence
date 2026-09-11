@@ -23,12 +23,12 @@ def _client(db_path):
     return TestClient(create_app(db_path=db_path))
 
 
-def _seed_gbpw_report(conn):
+def _seed_gbpw_report(conn, week_ending=WEEK_ENDING, headline="Test week headline."):
     """Seeds a real week of Elexon-style data and builds real facts via
     build_week(), rather than hand-writing a facts dict -- avoids drifting
     out of sync with metrics.py's actual output shape.
     """
-    dates = week_dates(WEEK_ENDING)
+    dates = week_dates(week_ending)
     for d in dates:
         rows = []
         for sp in range(1, 49):
@@ -39,11 +39,11 @@ def _seed_gbpw_report(conn):
             rows.append(PriceRow("demand", d, sp, "NA", 25000.0))
         upsert_prices(conn, rows)
 
-    facts = build_week(conn, WEEK_ENDING)
-    narrative = {"headline": "Test week headline.", "byline": "Test byline.", "drivers": ["a", "b", "c"]}
+    facts = build_week(conn, week_ending)
+    narrative = {"headline": headline, "byline": "Test byline.", "drivers": ["a", "b", "c"]}
     upsert_report(
         conn,
-        week_ending=WEEK_ENDING,
+        week_ending=week_ending,
         facts_json=json.dumps(facts),
         narrative=json.dumps(narrative),
         run_basis=facts["run_basis"],
@@ -91,6 +91,32 @@ def test_gbpw_weekly_page_renders_from_stored_report(tmp_path):
     r = client.get(f"/gbpw/{WEEK_ENDING.isoformat()}")
     assert r.status_code == 200
     assert "Test week headline." in r.text
+
+
+def test_gbpw_single_week_has_no_picker(tmp_path):
+    # A dropdown with one option is noise, not a feature -- only show it
+    # once there's actually somewhere else to go.
+    conn = connect(tmp_path / "test.db")
+    _seed_gbpw_report(conn)
+    client = _client(tmp_path / "test.db")
+    r = client.get(f"/gbpw/{WEEK_ENDING.isoformat()}")
+    assert "webnav-week-select" not in r.text
+
+
+def test_gbpw_multiple_weeks_shows_picker_with_all_weeks_selected_current(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    _seed_gbpw_report(conn)
+    prior_week = date(2026, 8, 23)
+    _seed_gbpw_report(conn, week_ending=prior_week, headline="Prior week headline.")
+    client = _client(tmp_path / "test.db")
+
+    r = client.get(f"/gbpw/{WEEK_ENDING.isoformat()}")
+    assert "webnav-week-select" in r.text
+    assert f'value="{WEEK_ENDING.isoformat()}" selected' in r.text
+    assert f'value="{prior_week.isoformat()}">' in r.text  # listed, not selected
+
+    r2 = client.get(f"/gbpw/{prior_week.isoformat()}")
+    assert f'value="{prior_week.isoformat()}" selected' in r2.text
 
 
 def test_gbpw_latest_redirects_to_stored_week(tmp_path):

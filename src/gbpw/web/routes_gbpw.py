@@ -26,12 +26,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..render.render import render_week
-from ..storage import get_report, latest_report_week
+from ..storage import get_report, latest_report_week, list_report_weeks
 from .deps import get_db
 
 router = APIRouter()
 
-_WEB_NAV_BAR = """
+_WEB_NAV_CSS = """
 <style>
   @media print { .webnav-appnav { display:none; } }
   .webnav-appnav { background:#10294A; font:13.5px -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; }
@@ -46,7 +46,32 @@ _WEB_NAV_BAR = """
   .webnav-appnav nav a.soon span { font-size:10.5px; margin-left:5px; border:1px solid #45577A; padding:1px 5px;
     border-radius:8px; color:#8FA0BC; }
   .webnav-appnav nav a:not(.soon):not(.on):hover { color:#fff; }
+  .webnav-weekpick { margin-left:auto; display:flex; align-items:center; gap:8px; }
+  .webnav-weekpick label { color:#8FA0BC; font-size:12px; }
+  .webnav-weekpick select { background:#16305A; color:#fff; border:1px solid #2B4B73; border-radius:4px;
+    font:13px -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; padding:5px 8px; }
 </style>
+"""
+
+
+def _week_nav_bar(weeks: list[dict], current: date) -> str:
+    options = []
+    for w in weeks:
+        label = w["week_ending"].strftime("Week ending %a %d %b %Y")
+        if not w["published"]:
+            label += " (draft)"
+        selected = " selected" if w["week_ending"] == current else ""
+        options.append(f'<option value="{w["week_ending"].isoformat()}"{selected}>{label}</option>')
+    picker = ""
+    if len(weeks) > 1:
+        picker = f"""
+    <div class="webnav-weekpick">
+      <label for="webnav-week-select">Report</label>
+      <select id="webnav-week-select" onchange="location.href='/gbpw/' + this.value">
+        {"".join(options)}
+      </select>
+    </div>"""
+    return f"""{_WEB_NAV_CSS}
 <div class="webnav-appnav">
   <div class="webnav-wrap">
     <div class="webnav-brand">Mazao Consulting <span>/ Energy Data Analytics</span></div>
@@ -55,14 +80,14 @@ _WEB_NAV_BAR = """
       <a href="/bess">BESS Analytics</a>
       <a class="soon">Live market<span>soon</span></a>
       <a class="soon">PPA tools<span>soon</span></a>
-    </nav>
+    </nav>{picker}
   </div>
 </div>
 """
 
 
-def _with_web_nav(html: str) -> str:
-    return html.replace("<body>", "<body>" + _WEB_NAV_BAR, 1)
+def _with_web_nav(html: str, weeks: list[dict], current: date) -> str:
+    return html.replace("<body>", "<body>" + _week_nav_bar(weeks, current), 1)
 
 
 @router.get("/gbpw")
@@ -83,4 +108,5 @@ def weekly(week_ending: date, db: sqlite3.Connection = Depends(get_db)):
         json.loads(report["narrative"]),
         datetime.fromisoformat(report["built_at"]),
     )
-    return HTMLResponse(content=_with_web_nav(html))
+    weeks = list_report_weeks(db)
+    return HTMLResponse(content=_with_web_nav(html, weeks, week_ending))

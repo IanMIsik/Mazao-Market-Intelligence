@@ -396,6 +396,17 @@ def latest_report_week(conn: sqlite3.Connection) -> date | None:
     return date.fromisoformat(row[0]) if row else None
 
 
+def list_report_weeks(conn: sqlite3.Connection) -> list[dict]:
+    """Every week a report has been built for, most recent first -- backs
+    the GB Power Weekly week picker so past weeks are reachable, not just
+    whatever latest_report_week() resolves to.
+    """
+    rows = conn.execute(
+        "SELECT week_ending, published FROM reports ORDER BY week_ending DESC"
+    ).fetchall()
+    return [{"week_ending": date.fromisoformat(w), "published": bool(p)} for w, p in rows]
+
+
 def mark_published(conn: sqlite3.Connection, week_ending: date, published: bool = True) -> bool:
     """Returns False if no report row exists yet for that week (build it first)."""
     cur = conn.execute(
