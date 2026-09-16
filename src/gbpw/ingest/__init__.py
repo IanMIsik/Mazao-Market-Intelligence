@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
 
-from . import eac, elexon, elexon_bm
+from . import eac, elexon, elexon_bm, entsoe_flows, neso_embedded, pvlive, semo_flows
 from ..settlement import week_dates
 from ..storage import (
     BmCashflowRow,
@@ -31,7 +31,10 @@ from ..storage import (
 # the actual bottleneck being addressed here.
 DEFAULT_MAX_WORKERS = 8
 
-SERIES = ("day_ahead", "imbalance", "wind", "total_generation", "demand")
+SERIES = (
+    "day_ahead", "imbalance", "wind", "total_generation", "demand",
+    "solar", "demand_itsdo", "wind_forecast", "demand_forecast", "interconnector_actual",
+)
 
 EAC_SERIES = "eac"
 EAC_CHUNK_DAYS = 7  # bounds each NESO request; also the resumability granularity
@@ -62,12 +65,15 @@ def ingest_day(conn: sqlite3.Connection, d: date) -> None:
         log_fetch(conn, "imbalance", d, ok=False, note=str(e))
 
     try:
-        wind_rows, total_rows, note = elexon.fetch_generation(d)
+        wind_rows, total_rows, interconnector_rows, note = elexon.fetch_generation(d)
         upsert_prices(conn, wind_rows)
         upsert_prices(conn, total_rows)
+        upsert_prices(conn, interconnector_rows)
         log_fetch(conn, "wind", d, ok=True, note=note)
+        log_fetch(conn, "interconnector_actual", d, ok=True, note=f"ok ({len(interconnector_rows)} rows)")
     except Exception as e:  # noqa: BLE001
         log_fetch(conn, "wind", d, ok=False, note=str(e))
+        log_fetch(conn, "interconnector_actual", d, ok=False, note=str(e))
 
     try:
         rows, note = elexon.fetch_demand(d)
@@ -75,6 +81,34 @@ def ingest_day(conn: sqlite3.Connection, d: date) -> None:
         log_fetch(conn, "demand", d, ok=True, note=note)
     except Exception as e:  # noqa: BLE001
         log_fetch(conn, "demand", d, ok=False, note=str(e))
+
+    try:
+        rows, note = elexon.fetch_demand_itsdo(d)
+        upsert_prices(conn, rows)
+        log_fetch(conn, "demand_itsdo", d, ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "demand_itsdo", d, ok=False, note=str(e))
+
+    try:
+        rows, note = elexon.fetch_wind_forecast(d)
+        upsert_prices(conn, rows)
+        log_fetch(conn, "wind_forecast", d, ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "wind_forecast", d, ok=False, note=str(e))
+
+    try:
+        rows, note = elexon.fetch_demand_forecast(d)
+        upsert_prices(conn, rows)
+        log_fetch(conn, "demand_forecast", d, ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "demand_forecast", d, ok=False, note=str(e))
+
+    try:
+        rows, note = pvlive.fetch_solar(d)
+        upsert_prices(conn, rows)
+        log_fetch(conn, "solar", d, ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "solar", d, ok=False, note=str(e))
 
 
 def ingest_week(conn: sqlite3.Connection, dates: list[date]) -> None:
@@ -178,6 +212,47 @@ def _to_float(v: object) -> float | None:
     if v in (None, ""):
         return None
     return float(v)  # type: ignore[arg-type]
+
+
+def ingest_solar_forecast(conn: sqlite3.Connection) -> None:
+    """NESO's embedded solar forecast (see ingest/neso_embedded.py) -- a
+    single rolling-window fetch, not date-scoped, so this is called once
+    per Live Market refresh cycle (background_refresh.py), not once per
+    date the way ingest_day()'s series are.
+    """
+    try:
+        rows, note = neso_embedded.fetch_solar_forecast()
+        upsert_prices(conn, rows)
+        log_fetch(conn, "solar_forecast", date.today(), ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "solar_forecast", date.today(), ok=False, note=str(e))
+
+
+def ingest_interconnector_scheduled(conn: sqlite3.Connection, today: date) -> None:
+    """Scheduled interconnector flows for `today` -- continental links via
+    ENTSO-E, Irish links via SEMO. Deliberately not folded into
+    ingest_day(): unlike interconnector_actual (Phase 2, reuses FUELHH data
+    ingest_day() already fetches for other reasons), this is Live-Market-
+    only and would otherwise burden GB Power Weekly's historical report
+    backfills (which call ingest_day() for dozens of unrelated past dates)
+    with ENTSO-E/SEMO calls they have no use for. Called once per Live
+    Market refresh cycle instead, same reasoning as ingest_solar_forecast().
+    Each source logged independently -- e.g. a missing ENTSOE_KEY must not
+    hide a working SEMO fetch, or vice versa.
+    """
+    try:
+        rows, note = entsoe_flows.fetch_continental_scheduled(today)
+        upsert_prices(conn, rows)
+        log_fetch(conn, "interconnector_scheduled_entsoe", today, ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "interconnector_scheduled_entsoe", today, ok=False, note=str(e))
+
+    try:
+        rows, note = semo_flows.fetch_semo_scheduled(today)
+        upsert_prices(conn, rows)
+        log_fetch(conn, "interconnector_scheduled_semo", today, ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "interconnector_scheduled_semo", today, ok=False, note=str(e))
 
 
 def ingest_bmu_reference(conn: sqlite3.Connection) -> None:

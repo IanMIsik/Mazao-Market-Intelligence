@@ -10,9 +10,10 @@
   Trade-off, stated plainly rather than hidden: this is a full page
   reload, so any in-progress "Selected participants" search (client-side
   JS state, not part of the URL) is lost on refresh, same as if the user
-  had pressed F5 themselves. 1800s = 30 minutes, per direct request.
+  had pressed F5 themselves. 300s = 5 minutes, per direct request -- matches
+  background_refresh.py's DEFAULT_INTERVAL_SECONDS.
 -->
-<meta http-equiv="refresh" content="1800">
+<meta http-equiv="refresh" content="300">
 {% endblock %}
 
 {% block content %}

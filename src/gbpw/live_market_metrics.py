@@ -74,3 +74,53 @@ def today_progression(conn: sqlite3.Connection, series: str, today: date) -> dic
         "latest_sp": latest_sp,
         "points": [{"sp": sp, "value": round(v, 2)} for sp, v in points],
     }
+
+
+def delta_vs_yesterday(conn: sqlite3.Connection, series: str, today: date) -> float | None:
+    """Today's latest value minus yesterday's value at the *same*
+    settlement period -- the most comparable prior figure for a KPI delta.
+    None if either side is missing (early in the day, or yesterday genuinely
+    has a gap) rather than comparing against a different period.
+    """
+    today_data = today_progression(conn, series, today)
+    if today_data["latest_value"] is None:
+        return None
+    yesterday = today - timedelta(days=1)
+    loaded = series_for_week(conn, series, [yesterday])
+    prior = loaded.get((yesterday.isoformat(), today_data["latest_sp"]))
+    if prior is None:
+        return None
+    return round(today_data["latest_value"] - prior, 2)
+
+
+def actual_vs_forecast(conn: sqlite3.Connection, actual_series: str, forecast_series: str, today: date) -> dict:
+    """Today's actual progression paired with the latest-published forecast
+    for the same settlement periods (series_for_week()'s MAX(run)
+    resolution already picks the latest vintage -- see storage.py). Also
+    includes forecast-only periods later today that haven't cleared as
+    actuals yet, so the chart can show the forecast running ahead of the
+    actual line. A period missing one side shows None for it, never a
+    fabricated value.
+    """
+    actual = today_progression(conn, actual_series, today)
+    forecast_loaded = series_for_week(conn, forecast_series, [today])
+    forecast_by_sp = {sp: v for (_sd, sp), v in forecast_loaded.items()}
+
+    seen_sps = {p["sp"] for p in actual["points"]}
+    points = [
+        {"sp": p["sp"], "actual": p["value"],
+         "forecast": round(forecast_by_sp[p["sp"]], 2) if p["sp"] in forecast_by_sp else None}
+        for p in actual["points"]
+    ]
+    for sp, v in sorted(forecast_by_sp.items()):
+        if sp not in seen_sps:
+            points.append({"sp": sp, "actual": None, "forecast": round(v, 2)})
+    points.sort(key=lambda p: p["sp"])
+
+    latest_forecast = forecast_by_sp.get(actual["latest_sp"]) if actual["latest_sp"] is not None else None
+    return {
+        "latest_actual": actual["latest_value"],
+        "latest_forecast": round(latest_forecast, 2) if latest_forecast is not None else None,
+        "latest_sp": actual["latest_sp"],
+        "points": points,
+    }

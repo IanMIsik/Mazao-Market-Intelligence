@@ -31,11 +31,11 @@ up revisions as Elexon settlement runs progress.
 from __future__ import annotations
 
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 
-from ..settlement import sp_start_utc
+from ..settlement import sp_start_utc, utc_to_settlement
 from ..storage import NA_RUN, PriceRow
 
 BASE = "https://data.elexon.co.uk/bmrs/api/v1"
@@ -50,6 +50,23 @@ RETRY_BACKOFF_SECONDS = 2
 # domestic generation, matching how NESO's own fuel-mix reporting frames it.
 INTERCONNECTOR_PREFIX = "INT"
 WIND_FUEL_TYPE = "WIND"
+
+# fuelType code -> (series key, display name, counterparty country). Live-
+# verified against a real FUELHH pull (all 10 codes seen in one sample) --
+# not guessed from the notebook. series stored as
+# f"interconnector_{key}_actual".
+INTERCONNECTORS: dict[str, tuple[str, str, str]] = {
+    "INTFR": ("ifa", "IFA", "FR"),
+    "INTIFA2": ("ifa2", "IFA2", "FR"),
+    "INTELEC": ("eleclink", "ElecLink", "FR"),
+    "INTNED": ("britned", "BritNed", "NL"),
+    "INTNEM": ("nemo", "Nemo", "BE"),
+    "INTNSL": ("nsl", "North Sea Link", "NO"),
+    "INTVKL": ("vikinglink", "Viking Link", "DK"),
+    "INTGRNL": ("greenlink", "Greenlink", "IRL"),
+    "INTEW": ("eastwest", "East-West", "IRL"),
+    "INTIRL": ("moyle", "Moyle", "N.IRL"),
+}
 
 
 def _get(url: str, params: dict) -> list[dict]:
@@ -118,26 +135,43 @@ def fetch_imbalance(d: date) -> tuple[list[PriceRow], str]:
     return out, note
 
 
-def fetch_generation(d: date) -> tuple[list[PriceRow], list[PriceRow], str]:
-    """Returns (wind_rows, total_generation_rows, note)."""
+def fetch_generation(d: date) -> tuple[list[PriceRow], list[PriceRow], list[PriceRow], str]:
+    """Returns (wind_rows, total_generation_rows, interconnector_rows, note).
+    interconnector_rows are the same INT*-prefixed rows that were always
+    being fetched here and discarded from the total -- now also kept, one
+    series per named link (series="interconnector_<key>_actual"), zero new
+    HTTP calls.
+    """
     start, end = _local_day_utc_bounds(d, pad_hours=1)
     rows = _get(f"{BASE}/datasets/FUELHH", {"publishDateTimeFrom": start, "publishDateTimeTo": end})
     rows = [r for r in rows if r["settlementDate"] == d.isoformat()]
 
     wind_by_sp: dict[int, float] = {}
     total_by_sp: dict[int, float] = {}
+    interconnector_by_key_sp: dict[tuple[str, int], float] = {}
     for r in rows:
         sp = r["settlementPeriod"]
         gen = r["generation"]
-        if r["fuelType"] == WIND_FUEL_TYPE:
+        fuel_type = r["fuelType"]
+        if fuel_type == WIND_FUEL_TYPE:
             wind_by_sp[sp] = gen
-        if not r["fuelType"].startswith(INTERCONNECTOR_PREFIX):
+        if not fuel_type.startswith(INTERCONNECTOR_PREFIX):
             total_by_sp[sp] = total_by_sp.get(sp, 0.0) + gen
+        elif fuel_type in INTERCONNECTORS:
+            key, _name, _country = INTERCONNECTORS[fuel_type]
+            interconnector_by_key_sp[(key, sp)] = gen
+        # An INT* code outside INTERCONNECTORS would mean a new/renamed link
+        # Elexon started reporting -- silently dropped here rather than
+        # crashing ingest, same as any other unexpected upstream field.
 
     wind_rows = [PriceRow(series="wind", sd=d, sp=sp, run=NA_RUN, value=v) for sp, v in sorted(wind_by_sp.items())]
     total_rows = [PriceRow(series="total_generation", sd=d, sp=sp, run=NA_RUN, value=v) for sp, v in sorted(total_by_sp.items())]
+    interconnector_rows = [
+        PriceRow(series=f"interconnector_{key}_actual", sd=d, sp=sp, run=NA_RUN, value=v)
+        for (key, sp), v in sorted(interconnector_by_key_sp.items())
+    ]
     note = f"ok ({len(wind_rows)} periods)"
-    return wind_rows, total_rows, note
+    return wind_rows, total_rows, interconnector_rows, note
 
 
 def fetch_demand(d: date) -> tuple[list[PriceRow], str]:
@@ -146,4 +180,65 @@ def fetch_demand(d: date) -> tuple[list[PriceRow], str]:
     rows = [r for r in rows if r["settlementDate"] == d.isoformat()]
     out = [PriceRow(series="demand", sd=d, sp=r["settlementPeriod"], run=NA_RUN, value=r["demand"]) for r in rows]
     note = f"ok ({len(out)} periods)"
+    return out, note
+
+
+def fetch_demand_itsdo(d: date) -> tuple[list[PriceRow], str]:
+    """Transmission-level demand (ITSDO) -- distinct from `demand` (INDO),
+    a genuine cross-check, not a duplicate."""
+    start, end = _local_day_utc_bounds(d, pad_hours=1)
+    rows = _get(f"{BASE}/datasets/ITSDO", {"publishDateTimeFrom": start, "publishDateTimeTo": end})
+    rows = [r for r in rows if r["settlementDate"] == d.isoformat()]
+    out = [PriceRow(series="demand_itsdo", sd=d, sp=r["settlementPeriod"], run=NA_RUN, value=r["demand"]) for r in rows]
+    note = f"ok ({len(out)} periods)"
+    return out, note
+
+
+def fetch_wind_forecast(d: date) -> tuple[list[PriceRow], str]:
+    """Wind generation forecast (WINDFOR). Rows carry no settlementDate/
+    settlementPeriod field (unlike most /datasets/ endpoints) -- only an
+    hourly startTime. Deriving (sd, sp) from that timestamp alone only
+    ever lands on the *first* of the hour's two settlement periods (the
+    odd one) -- confirmed live: a day's worth of stored rows was odd-SP
+    only, every even SP silently empty. WINDFOR is genuinely hourly (one
+    value per hour, not per half-hour), so each value covers *two*
+    settlement periods -- the user's own Fundies.ipynb notebook handles
+    this explicitly (cell 5's odd -> (odd, odd+1) sp_df expansion), ported
+    here directly rather than left as a derived-period bug.
+
+    Multiple published vintages cover the same period; every row is stored
+    under run=<publishTime> rather than pre-filtered to "the latest" here
+    -- series_for_week()'s MAX(run)-per-period logic (storage.py) already
+    resolves that at read time.
+    """
+    start, end = _local_day_utc_bounds(d, pad_hours=1)
+    rows = _get(f"{BASE}/datasets/WINDFOR", {"publishDateTimeFrom": start, "publishDateTimeTo": end})
+    out: list[PriceRow] = []
+    for r in rows:
+        dt = datetime.strptime(r["startTime"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        sd, sp = utc_to_settlement(dt)
+        if sd != d:
+            continue
+        for covered_sp in (sp, sp + 1):
+            out.append(PriceRow(series="wind_forecast", sd=sd, sp=covered_sp, run=r["publishTime"], value=r["generation"]))
+    note = f"ok ({len(out)} rows)"
+    return out, note
+
+
+def fetch_demand_forecast(d: date) -> tuple[list[PriceRow], str]:
+    """Demand forecast (NDF, boundary=N -- national). Unlike every other
+    /datasets/ endpoint used here, NDF rejects any publishDateTimeFrom/To
+    window over 1 day (confirmed live: HTTP 400, "must not exceed 1 day"),
+    so this uses the exact, unpadded local-day bounds rather than
+    _local_day_utc_bounds()'s usual +/-1hr pad. Same run=<publishTime>
+    multi-vintage storage as fetch_wind_forecast().
+    """
+    start, end = _local_day_utc_bounds(d, pad_hours=0)
+    rows = _get(f"{BASE}/datasets/NDF", {"publishDateTimeFrom": start, "publishDateTimeTo": end, "boundary": "N"})
+    rows = [r for r in rows if r["settlementDate"] == d.isoformat()]
+    out = [
+        PriceRow(series="demand_forecast", sd=d, sp=r["settlementPeriod"], run=r["publishTime"], value=r["demand"])
+        for r in rows
+    ]
+    note = f"ok ({len(out)} rows)"
     return out, note

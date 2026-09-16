@@ -25,13 +25,15 @@ from ..ingest import (
     ingest_bm_cashflows_range_parallel,
     ingest_bmu_reference,
     ingest_eac_range_parallel,
+    ingest_interconnector_scheduled,
+    ingest_solar_forecast,
     ingest_week_parallel,
 )
 from ..storage import connect
 
 logger = logging.getLogger("gbpw.web.background_refresh")
 
-DEFAULT_INTERVAL_SECONDS = 1800  # 30 minutes, matches both pages' own meta refresh
+DEFAULT_INTERVAL_SECONDS = 300  # 5 minutes, per direct request -- matches both pages' own meta refresh
 TRAILING_WINDOW_DAYS = 3  # EAC/BM data for the last few days can still be revised
 
 
@@ -52,26 +54,50 @@ def _refresh_once(db_path: Path) -> None:
     # far" is already-settled data GB Power Weekly's own ingest covers) --
     # a single date is enough here, unlike the trailing window above.
     ingest_week_parallel(db_path, [today])
-    logger.info("background refresh: re-ingested today's day-ahead/imbalance/wind/demand for %s", today)
+    logger.info("background refresh: re-ingested today's Live Market fundamentals (incl. solar/forecasts/interconnectors) for %s", today)
+
+    # Not date-scoped (solar forecast) or Live-Market-only (scheduled
+    # interconnector flows) -- see ingest_solar_forecast()/
+    # ingest_interconnector_scheduled() docstrings for why these aren't
+    # folded into ingest_week_parallel()/ingest_day() above.
+    conn = connect(db_path)
+    try:
+        ingest_solar_forecast(conn)
+        ingest_interconnector_scheduled(conn, today)
+    finally:
+        conn.close()
+    logger.info("background refresh: re-ingested solar forecast + scheduled interconnector flows for %s", today)
 
 
 def start_background_refresh(db_path: Path, interval_seconds: int = DEFAULT_INTERVAL_SECONDS) -> threading.Event:
-    """Starts a daemon thread that calls _refresh_once() every
-    interval_seconds, starting *after* the first interval elapses (not
-    immediately on startup) -- deliberate, so `gbpw serve --reload` doesn't
-    fire a real round of Elexon/NESO calls on every single code-save
-    restart during development. Returns the stop Event so callers (tests,
-    graceful shutdown) can end the loop early; daemon=True already means it
-    won't block process exit on its own.
+    """Starts a daemon thread that calls _refresh_once() immediately, then
+    every interval_seconds after that.
+
+    This used to wait out the first interval before ever refreshing, to
+    avoid `gbpw serve --reload` firing a real round of Elexon/NESO/ENTSO-E
+    calls on every single code-save restart during development. In
+    practice that made a page look stale for a full 30 minutes after
+    *every* server start -- including a genuinely fresh `gbpw serve` -- and
+    during active development `--reload` restarts the app (and this
+    thread) often enough that the 30-minute countdown routinely never
+    survives to complete a single cycle, so the background refresh
+    effectively never ran. Firing immediately trades a bit of extra API
+    traffic during heavy edit-reload cycles for a page that's never stale
+    right after startup -- the better trade for this project's actual
+    usage pattern. Returns the stop Event so callers (tests, graceful
+    shutdown) can end the loop early; daemon=True already means it won't
+    block process exit on its own.
     """
     stop = threading.Event()
 
     def _loop() -> None:
-        while not stop.wait(interval_seconds):
+        while True:
             try:
                 _refresh_once(db_path)
             except Exception:  # noqa: BLE001 -- a bad refresh cycle must not kill the loop
                 logger.exception("background refresh cycle failed, will retry next interval")
+            if stop.wait(interval_seconds):
+                break
 
     thread = threading.Thread(target=_loop, name="bess-background-refresh", daemon=True)
     thread.start()

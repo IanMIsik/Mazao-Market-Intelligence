@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/static/app.css">
 {% block extra_head %}{% endblock %}
 </head>
-<body>
+<body class="{{ 'live' if active_nav == 'live' else '' }}">
 
 <div class="appnav">
   <div class="wrap">

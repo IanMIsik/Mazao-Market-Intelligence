@@ -21,6 +21,7 @@ from gbpw import ingest  # noqa: E402
 from gbpw.ingest import eac as eac_module  # noqa: E402
 from gbpw.ingest import elexon as elexon_module  # noqa: E402
 from gbpw.ingest import elexon_bm as elexon_bm_module  # noqa: E402
+from gbpw.ingest import pvlive as pvlive_module  # noqa: E402
 from gbpw.storage import EacRow, connect  # noqa: E402
 
 
@@ -33,10 +34,14 @@ def _fake_imbalance(d):
 
 
 def _fake_generation(d):
-    return [], [], "ok"
+    return [], [], [], "ok"
 
 
 def _fake_demand(d):
+    return [], "ok"
+
+
+def _fake_solar(d):
     return [], "ok"
 
 
@@ -45,6 +50,10 @@ def test_ingest_week_parallel_processes_every_date(tmp_path, monkeypatch):
     monkeypatch.setattr(elexon_module, "fetch_imbalance", _fake_imbalance)
     monkeypatch.setattr(elexon_module, "fetch_generation", _fake_generation)
     monkeypatch.setattr(elexon_module, "fetch_demand", _fake_demand)
+    monkeypatch.setattr(elexon_module, "fetch_demand_itsdo", _fake_demand)
+    monkeypatch.setattr(elexon_module, "fetch_wind_forecast", _fake_imbalance)
+    monkeypatch.setattr(elexon_module, "fetch_demand_forecast", _fake_imbalance)
+    monkeypatch.setattr(pvlive_module, "fetch_solar", _fake_solar)
 
     db_path = tmp_path / "test.db"
     dates = [date(2026, 8, 1) + __import__("datetime").timedelta(days=i) for i in range(14)]

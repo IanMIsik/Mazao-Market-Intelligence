@@ -4,14 +4,18 @@
 {% block extra_head %}
 <!-- Same reasoning as BESS Analytics' meta refresh: this page is only
      useful if it's current, and a plain reload on the same URL is the
-     simplest way to guarantee that. 1800s = 30 minutes, matching BESS. -->
-<meta http-equiv="refresh" content="1800">
+     simplest way to guarantee that. 300s = 5 minutes, matching BESS and
+     background_refresh.py's DEFAULT_INTERVAL_SECONDS. -->
+<meta http-equiv="refresh" content="300">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
 {% endblock %}
 
 {% block content %}
 
 <header>
-  <div class="brand2">Live market</div>
+  <div class="brand2">LIVE<span class="accent">&middot;</span>MARKET</div>
   <div class="stamp num">{{ today.strftime('%a %d %b %Y') }}</div>
 </header>
 
@@ -26,61 +30,144 @@
   Today's figures are a live, partial picture, not a final tally.
 </p>
 
-<div class="kpis">
-  {% for p in panels %}
-  <div class="kpi">
-    <div class="k">{{ p.label }}, latest</div>
-    {% if p.today.latest_value is not none %}
-    <div class="v num" style="color:{{ p.color }};">{{ p.today.latest_value|commas(2) }} <small>{{ p.unit }}</small></div>
-    <div class="ref num">SP{{ p.today.latest_sp }}</div>
-    {% else %}
-    <div class="v num">&mdash;</div>
-    <div class="ref">no data yet today</div>
-    {% endif %}
-  </div>
-  {% endfor %}
+<input type="radio" name="lm-tab" id="lm-tab-fundamentals" checked>
+<input type="radio" name="lm-tab" id="lm-tab-interconnectors">
+<div class="lm-tabs">
+  <label for="lm-tab-fundamentals">Fundamentals</label>
+  <label for="lm-tab-interconnectors">Interconnectors</label>
 </div>
 
-<div class="chart-grid">
-  {% for p in panels %}
-  <div>
-    <div class="cg-label" style="color:{{ p.color }};">{{ p.label }}, {{ p.unit }}</div>
-    {% if p.today_svg %}
-    {{ p.today_svg | safe }}
-    {% else %}
-    <div class="empty-state">No {{ p.label|lower }} published yet today.</div>
-    {% endif %}
-  </div>
-  {% endfor %}
-</div>
-<p class="section-note">Today so far &mdash; a live, partial picture, not a final tally.</p>
+<div class="lm-panel lm-panel-fundamentals">
 
-{% if combined_days %}
-<h2>Monday&ndash;yesterday, daily averages</h2>
-<hr class="rule">
-<table>
-  <thead>
-    <tr>
-      <th scope="col" style="text-align:left">Day</th>
-      {% for p in panels %}<th scope="col">{{ p.label }}</th>{% endfor %}
-    </tr>
-  </thead>
-  <tbody>
-    {% for row in combined_days %}
-    <tr>
-      <th scope="row">{{ row.date }}</th>
-      {% for cell in row.by_panel %}
-        {% if cell.periods > 0 %}
-        <td title="Peak {{ cell.peak|commas(2) }} &middot; Trough {{ cell.trough|commas(2) }}">{{ cell.avg|commas(2) }}</td>
+  <div class="lm-kpis">
+    <div class="lm-kpi">
+      <div class="k">Imbalance price, latest</div>
+      {% if imbalance_today.latest_value is not none %}
+      <div class="v">{{ imbalance_today.latest_value|commas(2) }} <small>£/MWh</small></div>
+      {% if imbalance_delta is not none %}
+        {% if imbalance_delta > 0 %}
+        <div class="delta up">&#9650; {{ imbalance_delta|abs|commas(2) }} vs SP{{ imbalance_today.latest_sp }} yesterday</div>
+        {% elif imbalance_delta < 0 %}
+        <div class="delta down">&#9660; {{ imbalance_delta|abs|commas(2) }} vs SP{{ imbalance_today.latest_sp }} yesterday</div>
         {% else %}
-        <td style="color:var(--muted);">no data</td>
+        <div class="delta flat">unchanged vs SP{{ imbalance_today.latest_sp }} yesterday</div>
         {% endif %}
+      {% else %}
+      <div class="delta flat">no comparable period yesterday</div>
+      {% endif %}
+      {% else %}
+      <div class="v">&mdash;</div>
+      <div class="delta flat">no data yet today</div>
+      {% endif %}
+    </div>
+    <div class="lm-kpi">
+      <div class="k">Wind output, latest</div>
+      {% if wind_cmp.latest_actual is not none %}
+      <div class="v">{{ (wind_cmp.latest_actual / 1000)|commas(2) }} <small>GW</small></div>
+      <div class="delta flat">SP{{ wind_cmp.latest_sp }}</div>
+      {% else %}<div class="v">&mdash;</div><div class="delta flat">no data yet today</div>{% endif %}
+    </div>
+    <div class="lm-kpi">
+      <div class="k">Solar output, latest</div>
+      {% if solar_cmp.latest_actual is not none %}
+      <div class="v">{{ (solar_cmp.latest_actual / 1000)|commas(2) }} <small>GW</small></div>
+      <div class="delta flat">SP{{ solar_cmp.latest_sp }}</div>
+      {% else %}<div class="v">&mdash;</div><div class="delta flat">no data yet today</div>{% endif %}
+    </div>
+    <div class="lm-kpi">
+      <div class="k">Demand, latest</div>
+      {% if demand_cmp.latest_actual is not none %}
+      <div class="v">{{ (demand_cmp.latest_actual / 1000)|commas(2) }} <small>GW</small></div>
+      <div class="delta flat">SP{{ demand_cmp.latest_sp }}</div>
+      {% else %}<div class="v">&mdash;</div><div class="delta flat">no data yet today</div>{% endif %}
+    </div>
+  </div>
+
+  <div class="lm-panels">
+    <div class="lm-card">
+      <div class="lm-card-title">Wind: actual vs forecast</div>
+      <div class="lm-card-sub">today so far, MW &middot; forecast is the latest-published WINDFOR vintage</div>
+      <div class="lm-legend">
+        <span><i style="background:var(--lm-teal);"></i>Actual</span>
+        <span><i class="dashed"></i>Forecast</span>
+      </div>
+      {% if wind_cmp_svg %}{{ wind_cmp_svg | safe }}{% else %}<div class="lm-empty">No wind data published yet today.</div>{% endif %}
+    </div>
+    <div class="lm-card">
+      <div class="lm-card-title">Demand: actual vs forecast</div>
+      <div class="lm-card-sub">today so far, MW &middot; forecast is the latest-published NDF vintage</div>
+      <div class="lm-legend">
+        <span><i style="background:var(--lm-violet);"></i>Actual</span>
+        <span><i class="dashed"></i>Forecast</span>
+      </div>
+      {% if demand_cmp_svg %}{{ demand_cmp_svg | safe }}{% else %}<div class="lm-empty">No demand data published yet today.</div>{% endif %}
+    </div>
+    <div class="lm-card">
+      <div class="lm-card-title">Solar: actual vs forecast</div>
+      <div class="lm-card-sub">today so far, MW &middot; forecast is NESO's embedded solar forecast</div>
+      <div class="lm-legend">
+        <span><i style="background:var(--lm-gold);"></i>Actual</span>
+        <span><i class="dashed"></i>Forecast</span>
+      </div>
+      {% if solar_cmp_svg %}{{ solar_cmp_svg | safe }}{% else %}<div class="lm-empty">No solar data published yet today.</div>{% endif %}
+    </div>
+  </div>
+  <p class="section-note">Today so far &mdash; a live, partial picture, not a final tally.</p>
+
+  {% if combined_days %}
+  <h2>Monday&ndash;yesterday, daily averages</h2>
+  <hr class="rule">
+  <table>
+    <thead>
+      <tr>
+        <th scope="col" style="text-align:left">Day</th>
+        {% for f in fundamentals %}<th scope="col">{{ f.label }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in combined_days %}
+      <tr>
+        <th scope="row">{{ row.date }}</th>
+        {% for cell in row.by_series %}
+          {% if cell.periods > 0 %}
+          <td title="Peak {{ cell.peak|commas(2) }} &middot; Trough {{ cell.trough|commas(2) }}">{{ cell.avg|commas(2) }}</td>
+          {% else %}
+          <td style="color:var(--lm-faint);">no data</td>
+          {% endif %}
+        {% endfor %}
+      </tr>
       {% endfor %}
-    </tr>
+    </tbody>
+  </table>
+  <p class="section-note">Hover a figure for that day's peak and trough.</p>
+  {% endif %}
+
+</div>
+
+<div class="lm-panel lm-panel-interconnectors">
+  <p class="section-note" style="margin:18px 0 4px;">
+    Scheduled (ENTSO-E for the continental links, SEMO for the Irish ones) vs actual metered
+    flow per link, today so far (+import / &minus;export).
+  </p>
+  <div class="lm-legend" style="margin:0 0 8px;">
+    <span><i style="background:var(--lm-violet);"></i>Actual</span>
+    <span><i class="dashed"></i>Scheduled</span>
+  </div>
+  <div class="lm-flows">
+    {% for ic in interconnectors %}
+    <div class="lm-flow">
+      <div class="lm-flow-head">
+        <span class="lm-flow-name">{{ ic.name }} <small>{{ ic.country }}</small></span>
+        {% if ic.cmp.latest_actual is not none %}
+        <span class="lm-flow-val">{{ ic.cmp.latest_actual|commas(0) }} MW</span>
+        {% else %}
+        <span class="lm-flow-val" style="color:var(--lm-faint);">&mdash;</span>
+        {% endif %}
+      </div>
+      {% if ic.cmp_svg %}{{ ic.cmp_svg | safe }}{% else %}<div class="lm-empty">No flow data published yet today.</div>{% endif %}
+    </div>
     {% endfor %}
-  </tbody>
-</table>
-<p class="section-note">Hover a figure for that day's peak and trough.</p>
-{% endif %}
+  </div>
+</div>
 
 {% endblock %}

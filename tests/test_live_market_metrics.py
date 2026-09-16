@@ -74,3 +74,72 @@ def test_today_progression_empty_when_nothing_published_yet(tmp_path):
     conn = connect(tmp_path / "test.db")
     result = lmm.today_progression(conn, "wind", date(2026, 9, 16))
     assert result == {"latest_value": None, "latest_sp": None, "points": []}
+
+
+def test_delta_vs_yesterday_compares_same_settlement_period(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    today, yesterday = date(2026, 9, 16), date(2026, 9, 15)
+    upsert_prices(conn, [
+        PriceRow("imbalance", yesterday, 3, "latest", 100.0),
+        PriceRow("imbalance", today, 3, "latest", 142.0),
+    ])
+
+    assert lmm.delta_vs_yesterday(conn, "imbalance", today) == 42.0
+
+
+def test_delta_vs_yesterday_none_when_today_has_no_data(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    assert lmm.delta_vs_yesterday(conn, "imbalance", date(2026, 9, 16)) is None
+
+
+def test_delta_vs_yesterday_none_when_yesterday_missing_that_period(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    today = date(2026, 9, 16)
+    upsert_prices(conn, [PriceRow("imbalance", today, 3, "latest", 142.0)])
+
+    assert lmm.delta_vs_yesterday(conn, "imbalance", today) is None
+
+
+def test_actual_vs_forecast_pairs_matching_periods(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    today = date(2026, 9, 16)
+    upsert_prices(conn, [
+        PriceRow("wind", today, 1, "NA", 3000.0),
+        PriceRow("wind", today, 2, "NA", 3200.0),
+        PriceRow("wind_forecast", today, 1, "2026-09-16T00:00:00Z", 2900.0),
+        PriceRow("wind_forecast", today, 2, "2026-09-16T00:00:00Z", 3100.0),
+        # Forecast reaches further ahead than the actual has cleared yet.
+        PriceRow("wind_forecast", today, 3, "2026-09-16T00:00:00Z", 3300.0),
+    ])
+
+    result = lmm.actual_vs_forecast(conn, "wind", "wind_forecast", today)
+
+    assert result["latest_actual"] == 3200.0
+    assert result["latest_forecast"] == 3100.0
+    assert result["latest_sp"] == 2
+    assert result["points"] == [
+        {"sp": 1, "actual": 3000.0, "forecast": 2900.0},
+        {"sp": 2, "actual": 3200.0, "forecast": 3100.0},
+        {"sp": 3, "actual": None, "forecast": 3300.0},
+    ]
+
+
+def test_actual_vs_forecast_uses_latest_published_vintage(tmp_path):
+    # series_for_week()'s MAX(run) resolution should pick the later publish.
+    conn = connect(tmp_path / "test.db")
+    today = date(2026, 9, 16)
+    upsert_prices(conn, [
+        PriceRow("demand", today, 1, "NA", 24000.0),
+        PriceRow("demand_forecast", today, 1, "2026-09-15T12:00:00Z", 23000.0),
+        PriceRow("demand_forecast", today, 1, "2026-09-16T06:00:00Z", 23800.0),
+    ])
+
+    result = lmm.actual_vs_forecast(conn, "demand", "demand_forecast", today)
+
+    assert result["points"] == [{"sp": 1, "actual": 24000.0, "forecast": 23800.0}]
+
+
+def test_actual_vs_forecast_empty_when_nothing_yet(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    result = lmm.actual_vs_forecast(conn, "wind", "wind_forecast", date(2026, 9, 16))
+    assert result == {"latest_actual": None, "latest_forecast": None, "latest_sp": None, "points": []}

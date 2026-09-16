@@ -1,44 +1,215 @@
 """
 SVG geometry for the Live Market page. Own module, not shared with
-charts_bess.py or render/charts.py -- different chart family (a single
-today-so-far progression line per dataset), same division of labour
-(pixel math here, templates only embed the returned markup).
+charts_bess.py or render/charts.py -- different chart family (a single or
+paired today-so-far progression per dataset), but the axis conventions
+(_ax_ticks-style "nice" gridlines, .ax/.grid/.axline CSS classes) follow
+render/charts.py's hero chart rather than inventing a new visual language.
+
+Unlike the weekly report's hero chart, these charts can't assume a
+0-based y-axis -- interconnector flow is signed (+import/-export), wind/
+solar/demand/price are not -- so the axis is built from the data's actual
+[min, max] rather than always starting at 0.
+
+Hover values (per settlement period) use plain SVG <title> elements on an
+invisible per-point hit-circle -- the same native-tooltip mechanism
+render/charts.py's heatmap_svg() already uses for its cells -- rather than
+adding a JS charting layer to a project that otherwise has none.
 """
 
 from __future__ import annotations
 
+import math
+
+AXIS_LEFT = 38.0
+PLOT_W = 214.0
+PLOT_TOP = 18.0  # headroom above the top gridline so the unit label (drawn
+                 # above the plot) never overlaps that gridline's own value
+                 # label -- they used to collide when PLOT_TOP was small.
+PLOT_H = 60.0
+UNIT_LABEL_Y = 8.0
+X_LABEL_Y = PLOT_TOP + PLOT_H + 13
+CAPTION_Y = X_LABEL_Y + 13
+VIEW_W = AXIS_LEFT + PLOT_W + 8
+VIEW_H = CAPTION_Y + 6
+HIT_RADIUS = 4.5
+
+
+def _nice_step(span: float, target_ticks: int) -> float:
+    if span <= 0:
+        span = 1.0
+    raw = span / target_ticks
+    magnitude = 10 ** math.floor(math.log10(raw))
+    for mult in (1, 2, 2.5, 5, 10):
+        step = magnitude * mult
+        if step >= raw:
+            return step
+    return magnitude * 10
+
+
+def _y_ticks(min_v: float, max_v: float, target_ticks: int = 4) -> list[float]:
+    """Round gridline values spanning at least [min_v, max_v]. Always
+    includes 0 as an exact tick when the data straddles zero (interconnector
+    flow), since that's the import/export reference line, not just another
+    number on the scale.
+    """
+    if min_v == max_v:
+        min_v, max_v = min_v - 1, max_v + 1
+    step = _nice_step(max_v - min_v, target_ticks)
+    lo = math.floor(min_v / step) * step
+    hi = math.ceil(max_v / step) * step
+    ticks = []
+    t = lo
+    while t <= hi + step / 2 and len(ticks) < 12:
+        ticks.append(round(t, 6))
+        t += step
+    return ticks
+
+
+def _sp_ticks(min_sp: int, max_sp: int, target_ticks: int = 6) -> list[int]:
+    span = max_sp - min_sp
+    if span <= 0:
+        return [min_sp]
+    step = max(2, round(span / target_ticks / 2) * 2)  # even step -- lands on whole hours
+    ticks = list(range(min_sp, max_sp, step))
+    if not ticks or ticks[-1] != max_sp:
+        ticks.append(max_sp)
+    return ticks
+
+
+def _fmt(v: float) -> str:
+    return f"{v:g}"
+
+
+def _axes(values: list[float], sps: list[int], unit_label: str) -> tuple[dict, list[str]]:
+    min_v, max_v = min(values), max(values)
+    y_ticks = _y_ticks(min_v, max_v)
+    axis_min, axis_max = y_ticks[0], y_ticks[-1]
+    v_span = (axis_max - axis_min) or 1.0
+
+    min_sp, max_sp = min(sps), max(sps)
+    sp_span = (max_sp - min_sp) or 1
+
+    def x(sp: int) -> float:
+        return AXIS_LEFT + ((sp - min_sp) / sp_span) * PLOT_W
+
+    def y(v: float) -> float:
+        return PLOT_TOP + PLOT_H - ((v - axis_min) / v_span) * PLOT_H
+
+    parts = [f'<text class="ax sm unit" x="{AXIS_LEFT - 5:.1f}" y="{UNIT_LABEL_Y:.1f}" text-anchor="end">{unit_label}</text>']
+    for t in y_ticks:
+        gy = y(t)
+        line_class = "axline" if t == 0 and axis_min < 0 < axis_max else "grid"
+        parts.append(f'<line class="{line_class}" x1="{AXIS_LEFT}" x2="{AXIS_LEFT + PLOT_W}" y1="{gy:.1f}" y2="{gy:.1f}"/>')
+        parts.append(f'<text class="ax sm" x="{AXIS_LEFT - 5:.1f}" y="{gy + 3.5:.1f}" text-anchor="end">{_fmt(t)}</text>')
+
+    for sp in _sp_ticks(min_sp, max_sp):
+        sx = x(sp)
+        parts.append(f'<line class="grid" x1="{sx:.1f}" x2="{sx:.1f}" y1="{PLOT_TOP}" y2="{PLOT_TOP + PLOT_H}"/>')
+        parts.append(f'<text class="ax sm" x="{sx:.1f}" y="{X_LABEL_Y:.1f}" text-anchor="middle">{sp}</text>')
+    parts.append(f'<text class="ax sm" x="{AXIS_LEFT + PLOT_W / 2:.1f}" y="{CAPTION_Y:.1f}" text-anchor="middle">Settlement period</text>')
+
+    return {"x": x, "y": y}, parts
+
 
 def progression_svg(points: list[dict], color: str, unit_label: str) -> str:
-    """A single line across today's settlement periods so far. Empty
-    (nothing cleared/published yet today) returns "" -- the template shows
-    its own empty-state text instead, same honesty convention as every
-    other chart on this site.
+    """A single line across today's settlement periods so far, with a
+    scaled y-axis, settlement-period tick marks on the x-axis, and a
+    hoverable value tooltip at each point. Empty (nothing cleared/
+    published yet today) returns "" -- the template shows its own
+    empty-state text instead, same honesty convention as every other chart
+    on this site.
     """
     if not points:
         return ""
     values = [p["value"] for p in points]
-    min_v, max_v = min(values), max(values)
-    span = (max_v - min_v) or 1.0
+    sps = [p["sp"] for p in points]
+    axes, axis_parts = _axes(values, sps, unit_label)
+    x, y = axes["x"], axes["y"]
 
-    x0, plot_w, plot_h, top = 0, 240, 60, 4
-    n = len(points)
-
-    def x(i: int) -> float:
-        return x0 + (i / (n - 1)) * plot_w if n > 1 else x0
-
-    def y(v: float) -> float:
-        return top + plot_h - ((v - min_v) / span) * plot_h
-
-    coords = [(x(i), y(p["value"])) for i, p in enumerate(points)]
+    coords = [(x(p["sp"]), y(p["value"])) for p in points]
     poly = " ".join(f"{cx:.1f},{cy:.1f}" for cx, cy in coords)
     last_x, last_y = coords[-1]
 
+    hits = "".join(
+        f'<circle class="chart-hit" cx="{cx:.1f}" cy="{cy:.1f}" r="{HIT_RADIUS}">'
+        f'<title>SP{p["sp"]}: {_fmt(p["value"])} {unit_label}</title></circle>'
+        for (cx, cy), p in zip(coords, points)
+    )
+
     parts = [
-        f'<svg viewBox="0 0 240 {plot_h + top * 2}" role="img" '
+        f'<svg viewBox="0 0 {VIEW_W:.0f} {VIEW_H:.0f}" role="img" '
         f'aria-label="Today so far, {unit_label}" preserveAspectRatio="xMidYMid meet">',
-        f'<line class="grid" x1="0" x2="240" y1="{top + plot_h}" y2="{top + plot_h}"/>',
-        f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1.8"/>',
+        *axis_parts,
+        f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1"/>',
         f'<circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="2.5" fill="{color}"/>',
+        hits,
         "</svg>",
     ]
     return "".join(parts)
+
+
+def comparison_svg(points: list[dict], actual_color: str, forecast_color: str, unit_label: str) -> str:
+    """Today's actual (solid) against the latest-published forecast
+    (dashed) across settlement periods, with the same scaled axes and
+    per-point hover tooltips as progression_svg(). Shape matches
+    live_market_metrics.actual_vs_forecast(): each point has
+    {sp, actual, forecast}, either of which may be None for a period that
+    hasn't cleared/published yet. Empty (neither side has any data at all)
+    returns "" -- same empty-state convention as progression_svg().
+    """
+    if not points:
+        return ""
+    values = [p[key] for p in points for key in ("actual", "forecast") if p[key] is not None]
+    if not values:
+        return ""
+    sps = [p["sp"] for p in points]
+    axes, axis_parts = _axes(values, sps, unit_label)
+    x, y = axes["x"], axes["y"]
+
+    def line(key: str, color: str, dashed: bool) -> str:
+        coords = [(x(p["sp"]), y(p[key])) for p in points if p[key] is not None]
+        if len(coords) < 2:
+            return ""
+        poly = " ".join(f"{cx:.1f},{cy:.1f}" for cx, cy in coords)
+        dash = ' stroke-dasharray="4,3"' if dashed else ""
+        return f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1"{dash}/>'
+
+    forecast_line = line("forecast", forecast_color, dashed=True)
+    actual_line = line("actual", actual_color, dashed=False)
+
+    marker = ""
+    last_actual = next((p for p in reversed(points) if p["actual"] is not None), None)
+    if last_actual is not None:
+        cx, cy = x(last_actual["sp"]), y(last_actual["actual"])
+        marker = f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="2.5" fill="{actual_color}"/>'
+
+    def hit_title(p: dict) -> str:
+        bits = []
+        if p["actual"] is not None:
+            bits.append(f"Actual {_fmt(p['actual'])} {unit_label}")
+        if p["forecast"] is not None:
+            bits.append(f"Forecast {_fmt(p['forecast'])} {unit_label}")
+        return f"SP{p['sp']}: " + ", ".join(bits)
+
+    # One hit-circle per point, positioned on whichever series has a value
+    # (preferring actual) -- avoids drawing two overlapping hit-targets at
+    # slightly different y positions for the same settlement period.
+    hits = []
+    for p in points:
+        ref_key = "actual" if p["actual"] is not None else "forecast"
+        if p[ref_key] is None:
+            continue
+        cx, cy = x(p["sp"]), y(p[ref_key])
+        hits.append(f'<circle class="chart-hit" cx="{cx:.1f}" cy="{cy:.1f}" r="{HIT_RADIUS}"><title>{hit_title(p)}</title></circle>')
+
+    parts = [
+        f'<svg viewBox="0 0 {VIEW_W:.0f} {VIEW_H:.0f}" role="img" '
+        f'aria-label="Actual vs forecast, {unit_label}" preserveAspectRatio="xMidYMid meet">',
+        *axis_parts,
+        forecast_line,
+        actual_line,
+        marker,
+        *hits,
+        "</svg>",
+    ]
+    return "".join(p for p in parts if p)
