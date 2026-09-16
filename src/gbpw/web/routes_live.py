@@ -41,6 +41,7 @@ def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db))
     today = date.today()
     week_range = lmm.week_so_far(today)
 
+    dates = list(_date_range(*week_range)) if week_range else []
     panels = []
     for p in PANELS:
         today_data = lmm.today_progression(db, p["series"], today)
@@ -48,7 +49,7 @@ def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db))
             **p,
             "today": today_data,
             "today_svg": charts_live.progression_svg(today_data["points"], p["color"], p["unit"]),
-            "days": lmm.day_stats(db, p["series"], list(_date_range(*week_range)) if week_range else []),
+            "days": lmm.day_stats(db, p["series"], dates),
         })
 
     context = {
@@ -57,6 +58,17 @@ def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db))
         "today": today,
         "week_range": week_range,
         "panels": panels,
+        # One row per date, one column per panel -- built here (pure
+        # reshaping of what day_stats() already computed above, not a new
+        # calculation) rather than four separate near-empty tables, which
+        # got harder to scan than the four independent charts above them
+        # were worth. Each panel's `days` list is already the same length
+        # and same date order (built from the same `dates`), so a
+        # straight zip is safe.
+        "combined_days": [
+            {"date": dates[i].isoformat(), "by_panel": [p["days"][i] for p in panels]}
+            for i in range(len(dates))
+        ],
     }
     return templates.TemplateResponse(request, "live_market.html", context)
 

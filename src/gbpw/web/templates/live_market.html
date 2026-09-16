@@ -26,46 +26,61 @@
   Today's figures are a live, partial picture, not a final tally.
 </p>
 
-{% for p in panels %}
-<div class="today-card">
-  <div class="today-card-head">
-    <h2>{{ p.label }}</h2>
-    <span class="section-note">
-      {% if p.today.latest_value is not none %}
-      Latest: <strong class="num" style="color:var(--navy);">{{ p.today.latest_value|commas(2) }} {{ p.unit }}</strong> (SP{{ p.today.latest_sp }})
-      {% else %}
-      No data yet today
-      {% endif %}
-    </span>
+<div class="kpis">
+  {% for p in panels %}
+  <div class="kpi">
+    <div class="k">{{ p.label }}, latest</div>
+    {% if p.today.latest_value is not none %}
+    <div class="v num" style="color:{{ p.color }};">{{ p.today.latest_value|commas(2) }} <small>{{ p.unit }}</small></div>
+    <div class="ref num">SP{{ p.today.latest_sp }}</div>
+    {% else %}
+    <div class="v num">&mdash;</div>
+    <div class="ref">no data yet today</div>
+    {% endif %}
   </div>
-
-  {% if p.today_svg %}
-  {{ p.today_svg | safe }}
-  {% else %}
-  <div class="empty-state">No {{ p.label|lower }} published yet today.</div>
-  {% endif %}
-
-  {% if p.days %}
-  <table style="margin-top:14px;">
-    <caption>{{ p.label }}, Monday&ndash;yesterday</caption>
-    <thead>
-      <tr><th scope="col" style="text-align:left">Day</th><th scope="col">Avg</th><th scope="col">Peak</th><th scope="col">Trough</th></tr>
-    </thead>
-    <tbody>
-      {% for d in p.days %}
-      <tr>
-        <th scope="row">{{ d.date }}</th>
-        {% if d.periods > 0 %}
-        <td>{{ d.avg|commas(2) }}</td><td>{{ d.peak|commas(2) }}</td><td>{{ d.trough|commas(2) }}</td>
-        {% else %}
-        <td colspan="3" style="color:var(--muted);">no data</td>
-        {% endif %}
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
+  {% endfor %}
 </div>
-{% endfor %}
+
+<div class="chart-grid">
+  {% for p in panels %}
+  <div>
+    <div class="cg-label" style="color:{{ p.color }};">{{ p.label }}, {{ p.unit }}</div>
+    {% if p.today_svg %}
+    {{ p.today_svg | safe }}
+    {% else %}
+    <div class="empty-state">No {{ p.label|lower }} published yet today.</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+<p class="section-note">Today so far &mdash; a live, partial picture, not a final tally.</p>
+
+{% if combined_days %}
+<h2>Monday&ndash;yesterday, daily averages</h2>
+<hr class="rule">
+<table>
+  <thead>
+    <tr>
+      <th scope="col" style="text-align:left">Day</th>
+      {% for p in panels %}<th scope="col">{{ p.label }}</th>{% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in combined_days %}
+    <tr>
+      <th scope="row">{{ row.date }}</th>
+      {% for cell in row.by_panel %}
+        {% if cell.periods > 0 %}
+        <td title="Peak {{ cell.peak|commas(2) }} &middot; Trough {{ cell.trough|commas(2) }}">{{ cell.avg|commas(2) }}</td>
+        {% else %}
+        <td style="color:var(--muted);">no data</td>
+        {% endif %}
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="section-note">Hover a figure for that day's peak and trough.</p>
+{% endif %}
 
 {% endblock %}

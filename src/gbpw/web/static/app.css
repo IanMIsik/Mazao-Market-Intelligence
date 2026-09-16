@@ -42,6 +42,10 @@ h1 { font-family:var(--serif); font-weight:400; color:var(--navy);
 .today-card-head h2 { margin:0; }
 .today-card-head .section-note { margin:0; max-width:38ch; text-align:right; }
 
+.chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:22px 28px; margin-top:18px; }
+.chart-grid .cg-label { font-size:12.5px; font-weight:600; margin-bottom:6px; }
+@media (max-width:640px) { .chart-grid { grid-template-columns:1fr; } }
+
 .filters { border:1px solid var(--rule); background:var(--callout); padding:14px 18px 16px; margin:20px 0 0; }
 .filters .row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
 .filters .row + .row { margin-top:12px; }
