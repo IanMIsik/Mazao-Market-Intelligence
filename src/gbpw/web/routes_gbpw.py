@@ -44,7 +44,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ..build import build_report
-from ..ingest import history_range, ingest_week
+from ..ingest import history_range, ingest_week_parallel
 from ..metrics import IncompleteWeekError
 from ..render.render import render_week
 from ..settlement import most_recent_sunday
@@ -158,7 +158,9 @@ def build_report_route(request: Request, week_ending: str, db: sqlite3.Connectio
     """Ingests the target week (plus 37 days of trailing history) live from
     Elexon and builds the report, exactly like `gbpw run --week-ending
     <date>` -- synchronous, so this request blocks for as long as the real
-    Elexon fetches take (can be a minute or two for a fresh week).
+    Elexon fetches take. Ingest itself is parallelized (ingest_week_parallel,
+    a ThreadPoolExecutor across dates) so this is now on the order of a
+    handful of seconds rather than minutes for a fresh week.
     """
     try:
         parsed = date.fromisoformat(week_ending)
@@ -179,7 +181,7 @@ def build_report_route(request: Request, week_ending: str, db: sqlite3.Connectio
     except ValueError as e:
         return _new_report_form(request, db, str(e), week_ending)
 
-    ingest_week(db, dates)
+    ingest_week_parallel(request.app.state.db_path, dates)
     out_path = Path("out") / f"gbpw-{parsed.isoformat()}.html"
     try:
         build_report(db, parsed, out_path)

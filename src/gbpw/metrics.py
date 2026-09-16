@@ -23,6 +23,20 @@ MW_PER_GW = 1000.0
 
 REQUIRED_SERIES = ("day_ahead", "imbalance", "wind", "total_generation", "demand")
 
+# imbalance/wind/total_generation/demand gaps almost always mean a real
+# ingest problem and stay fatal. day_ahead is handled separately below: a
+# day_ahead gap usually means Elexon's MID providers (APXMIDP/N2EXMIDP)
+# genuinely recorded no priced trade for that half-hour -- confirmed live
+# against the real API (both providers report price=0, volume=0 for the
+# missing periods) rather than assumed. Re-fetching that period will never
+# produce data that was never generated, so refusing to render the whole
+# week over it is unhelpful. A day_ahead day with SOME periods still
+# computes a real (if partial) average/peak/spread -- build_week()'s
+# per-day loop already derives its period set from what's actually present,
+# not an assumed fixed count. A day with ZERO day_ahead periods is the one
+# exception that still blocks -- there's no average to compute at all.
+STRICT_SERIES = ("imbalance", "wind", "total_generation", "demand")
+
 
 class IncompleteWeekError(Exception):
     pass
@@ -32,18 +46,33 @@ def _load_series(conn: sqlite3.Connection, series: str, dates: list[date]) -> di
     return series_for_week(conn, series, dates)
 
 
-def _check_completeness(loaded: dict[str, dict[tuple[str, int], float]], dates: list[date]) -> None:
+def _check_completeness(loaded: dict[str, dict[tuple[str, int], float]], dates: list[date]) -> list[dict]:
+    """Raises IncompleteWeekError for any STRICT_SERIES gap, or a day with
+    zero day_ahead periods. Returns the list of day_ahead gaps that were
+    tolerated (empty on a fully complete week) so callers can disclose them
+    rather than silently averaging around a partial day.
+    """
     problems = []
+    day_ahead_gaps = []
     for d in dates:
         expected = periods_in_date(d)
-        for series in REQUIRED_SERIES:
+        for series in STRICT_SERIES:
             actual = sum(1 for (sd, _sp) in loaded[series] if sd == d.isoformat())
             if actual != expected:
                 problems.append(f"{series} on {d.isoformat()}: expected {expected} periods, have {actual}")
+
+        da_periods = sorted(sp for (sd, sp) in loaded["day_ahead"] if sd == d.isoformat())
+        if not da_periods:
+            problems.append(f"day_ahead on {d.isoformat()}: expected {expected} periods, have 0")
+        elif len(da_periods) != expected:
+            missing = sorted(set(range(1, expected + 1)) - set(da_periods))
+            day_ahead_gaps.append({"date": d.isoformat(), "expected": expected, "missing_periods": missing})
+
     if problems:
         raise IncompleteWeekError(
             "Week is missing settlement periods, refusing to render:\n  " + "\n  ".join(problems)
         )
+    return day_ahead_gaps
 
 
 def _best_1h_spread(values: list[float]) -> float:
@@ -87,7 +116,7 @@ def build_week(conn: sqlite3.Connection, week_ending: date) -> dict:
     trailing_30_dates = [dates[0] - timedelta(days=n) for n in range(1, 31)]
 
     loaded = {s: _load_series(conn, s, dates) for s in REQUIRED_SERIES}
-    _check_completeness(loaded, dates)
+    day_ahead_gaps = _check_completeness(loaded, dates)
 
     day_ahead, imbalance, wind, total_gen, demand = (
         loaded["day_ahead"], loaded["imbalance"], loaded["wind"], loaded["total_generation"], loaded["demand"]
@@ -208,4 +237,5 @@ def build_week(conn: sqlite3.Connection, week_ending: date) -> dict:
             "returns its latest available run per period; for a report built this soon after week end "
             "that is effectively the initial run, ahead of later reconciliation."
         ),
+        "day_ahead_gaps": day_ahead_gaps,
     }

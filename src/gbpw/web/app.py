@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..storage import DEFAULT_DB_PATH
 from . import routes_bess, routes_gbpw
+from .background_refresh import start_background_refresh
 from .deps import get_db, make_get_db
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -26,9 +27,18 @@ DB_PATH_ENV_VAR = "GBPW_DB_PATH"
 def create_app(db_path: Path = DEFAULT_DB_PATH) -> FastAPI:
     app = FastAPI(title="Mazao Energy Data Analytics")
     app.dependency_overrides[get_db] = make_get_db(db_path)
+    # Routes that need to fan work out across threads (e.g. /gbpw/build's
+    # parallel ingest) need the raw path, not just a Connection -- each
+    # worker thread opens its own. Stashed on app.state rather than a
+    # second Depends() target since it's a plain value, not a per-request
+    # resource with its own lifecycle.
+    app.state.db_path = db_path
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(routes_gbpw.router)
     app.include_router(routes_bess.router)
+    # BESS Analytics' own meta refresh (bess_analytics.html) only shows
+    # fresh data if something is re-fetching it -- this is that something.
+    app.state.background_refresh_stop = start_background_refresh(db_path)
 
     @app.get("/")
     def index():

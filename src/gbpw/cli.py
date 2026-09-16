@@ -40,10 +40,10 @@ from pathlib import Path
 from .build import build_report, publish_report
 from .ingest import (
     history_range as _history_range,
-    ingest_bm_cashflows_range,
+    ingest_bm_cashflows_range_parallel,
     ingest_bmu_reference,
-    ingest_eac_range,
-    ingest_week,
+    ingest_eac_range_parallel,
+    ingest_week_parallel,
 )
 from .metrics import IncompleteWeekError, build_week
 from .settlement import most_recent_sunday as _most_recent_sunday
@@ -102,8 +102,13 @@ def _print_status(conn, week_ending: date, history_days: int) -> bool:
         print(f"No fetch failures logged for {dates[0]}..{dates[-1]}.")
 
     try:
-        build_week(conn, week_ending)
-        print(f"Week ending {week_ending} is complete (all settlement periods present).")
+        facts = build_week(conn, week_ending)
+        if facts["day_ahead_gaps"]:
+            print(f"Week ending {week_ending} builds, but with day-ahead gaps (tolerated, not fatal):")
+            for gap in facts["day_ahead_gaps"]:
+                print(f"  {gap['date']}: missing periods {gap['missing_periods']} (no priced MID trade)")
+        else:
+            print(f"Week ending {week_ending} is complete (all settlement periods present).")
     except IncompleteWeekError as e:
         healthy = False
         print(f"Week ending {week_ending} is INCOMPLETE:\n{e}")
@@ -173,7 +178,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "ingest":
         dates = _history_range(args.week_ending, args.history_days)
         print(f"Ingesting {len(dates)} days: {dates[0]} .. {dates[-1]}")
-        ingest_week(conn, dates)
+        ingest_week_parallel(args.db, dates)
         failures = _fetch_failures(conn, dates)
         if failures:
             print(f"Done, with {len(failures)} failure(s):")
@@ -197,7 +202,7 @@ def main(argv: list[str] | None = None) -> None:
         n_days = (args.end - args.start).days + 1
         tech = args.technology or "all technologies"
         print(f"Ingesting EAC results for {n_days} day(s): {args.start}..{args.end} ({tech})")
-        ingest_eac_range(conn, args.start, args.end, technology_type=args.technology)
+        ingest_eac_range_parallel(args.db, args.start, args.end, technology_type=args.technology)
         dates = [args.start + timedelta(days=i) for i in range(n_days)]
         sd_list = [d.isoformat() for d in dates]
         placeholders = ",".join("?" for _ in sd_list)
@@ -220,7 +225,7 @@ def main(argv: list[str] | None = None) -> None:
         n_days = (args.end - args.start).days + 1
         print(f"Refreshing BM unit reference, then ingesting {n_days} day(s) of cashflows: {args.start}..{args.end}")
         ingest_bmu_reference(conn)
-        ingest_bm_cashflows_range(conn, args.start, args.end)
+        ingest_bm_cashflows_range_parallel(args.db, args.start, args.end)
         dates = [args.start + timedelta(days=i) for i in range(n_days)]
         sd_list = [d.isoformat() for d in dates]
         placeholders = ",".join("?" for _ in sd_list)
@@ -247,7 +252,7 @@ def main(argv: list[str] | None = None) -> None:
         week_ending = _most_recent_sunday(date.today()) if args.week_ending == "auto" else args.week_ending
         dates = _history_range(week_ending, args.history_days)
         print(f"Ingesting {len(dates)} days: {dates[0]} .. {dates[-1]}")
-        ingest_week(conn, dates)
+        ingest_week_parallel(args.db, dates)
         failures = _fetch_failures(conn, dates)
         if failures:
             print(f"{len(failures)} fetch failure(s) -- see fetch_log. Continuing to build with what's available.")

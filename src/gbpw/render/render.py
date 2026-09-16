@@ -86,6 +86,7 @@ def render_week(facts: dict, narrative: dict, built_at_utc: datetime) -> str:
         "drivers": facts["drivers"],
         "days": days,
         "run_basis": facts["run_basis"],
+        "day_ahead_gaps": facts.get("day_ahead_gaps", []),
     }
     template = _env().get_template("template.html.j2")
     return template.render(**context)

@@ -1,6 +1,20 @@
 {% extends "base.html" %}
 {% block title %}BESS Analytics | Mazao Consulting{% endblock %}
 
+{% block extra_head %}
+<!--
+  EAC clears daily and BM cashflow settles continuously, so a page left
+  open can go stale within the same session -- a plain meta refresh (works
+  with no JS, survives navigating away and back) reloads the exact same
+  URL, so the current window/search-filter query params are preserved.
+  Trade-off, stated plainly rather than hidden: this is a full page
+  reload, so any in-progress "Selected participants" search (client-side
+  JS state, not part of the URL) is lost on refresh, same as if the user
+  had pressed F5 themselves. 1800s = 30 minutes, per direct request.
+-->
+<meta http-equiv="refresh" content="1800">
+{% endblock %}
+
 {% block content %}
 
 <header>

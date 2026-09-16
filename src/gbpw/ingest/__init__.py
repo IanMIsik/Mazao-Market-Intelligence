@@ -1,19 +1,35 @@
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
+from pathlib import Path
 
 from . import eac, elexon, elexon_bm
 from ..settlement import week_dates
 from ..storage import (
     BmCashflowRow,
     BmUnitReferenceRow,
+    connect,
     log_fetch,
     upsert_bm_cashflows,
     upsert_bm_unit_reference,
     upsert_eac_results,
     upsert_prices,
 )
+
+# Every fetch_* call is a blocking HTTP request (requests releases the GIL
+# while waiting on the socket), so these are I/O-bound, not CPU-bound --
+# ThreadPoolExecutor is the right tool, not multiprocessing. Each worker
+# opens its OWN sqlite3 connection (storage.connect() -- WAL mode + a 30s
+# busy_timeout, see storage.py) rather than sharing one across threads:
+# sqlite3.Connection objects aren't safe to use concurrently from multiple
+# threads, and WAL was specifically added earlier for exactly this kind of
+# concurrent-writer scenario. 8 workers is a practical default -- Elexon
+# and NESO's public APIs aren't documented as rate-limiting, but going much
+# wider risks tripping one, and network latency (not server throughput) is
+# the actual bottleneck being addressed here.
+DEFAULT_MAX_WORKERS = 8
 
 SERIES = ("day_ahead", "imbalance", "wind", "total_generation", "demand")
 
@@ -66,6 +82,28 @@ def ingest_week(conn: sqlite3.Connection, dates: list[date]) -> None:
         ingest_day(conn, d)
 
 
+def ingest_week_parallel(db_path: Path | str, dates: list[date], max_workers: int = DEFAULT_MAX_WORKERS) -> None:
+    """Same result as ingest_week(), but fetches every date's Elexon series
+    concurrently instead of one date at a time -- the dominant cost of
+    building a report is 40+ sequential days x 4 series of network
+    round-trips, not local computation. Takes a db path rather than an open
+    Connection since each worker thread needs its own connection.
+    """
+    def _one(d: date) -> None:
+        worker_conn = connect(db_path)
+        try:
+            ingest_day(worker_conn, d)
+        finally:
+            worker_conn.close()
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        # list() forces every future to be waited on and any unexpected
+        # exception (ingest_day itself never raises -- each series is its
+        # own try/except -- but a connect() failure could) to surface here
+        # rather than being silently dropped.
+        list(pool.map(_one, dates))
+
+
 def history_range(week_ending: date, history_days: int) -> list[date]:
     """The target week's 7 dates plus `history_days` of trailing context
     (needed for the 30-day median spread figure -- see metrics.py). Shared
@@ -99,6 +137,41 @@ def ingest_eac_range(
             for d in chunk_dates:
                 log_fetch(conn, EAC_SERIES, d, ok=False, note=str(e))
         chunk_start = chunk_end + timedelta(days=1)
+
+
+def ingest_eac_range_parallel(
+    db_path: Path | str, start: date, end: date, technology_type: str | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+) -> None:
+    """Same chunking/idempotency/resumability as ingest_eac_range(), but
+    every EAC_CHUNK_DAYS-sized chunk is fetched concurrently instead of one
+    chunk at a time -- same rationale as ingest_week_parallel()."""
+    chunks: list[tuple[date, date]] = []
+    chunk_start = start
+    while chunk_start <= end:
+        chunk_end = min(chunk_start + timedelta(days=EAC_CHUNK_DAYS - 1), end)
+        chunks.append((chunk_start, chunk_end))
+        chunk_start = chunk_end + timedelta(days=1)
+
+    def _one(bounds: tuple[date, date]) -> None:
+        chunk_start, chunk_end = bounds
+        chunk_dates = [chunk_start + timedelta(days=i) for i in range((chunk_end - chunk_start).days + 1)]
+        worker_conn = connect(db_path)
+        try:
+            try:
+                rows = eac.fetch_range(chunk_start, chunk_end, technology_type)
+                upsert_eac_results(worker_conn, rows)
+                note = f"ok ({len(rows)} rows, {chunk_start}..{chunk_end})"
+                for d in chunk_dates:
+                    log_fetch(worker_conn, EAC_SERIES, d, ok=True, note=note)
+            except Exception as e:  # noqa: BLE001 -- one bad chunk must not stop the rest
+                for d in chunk_dates:
+                    log_fetch(worker_conn, EAC_SERIES, d, ok=False, note=str(e))
+        finally:
+            worker_conn.close()
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        list(pool.map(_one, chunks))
 
 
 def _to_float(v: object) -> float | None:
@@ -159,3 +232,38 @@ def ingest_bm_cashflows_range(conn: sqlite3.Connection, start: date, end: date) 
         except Exception as e:  # noqa: BLE001 -- one bad day must not stop the rest
             log_fetch(conn, BM_CASHFLOW_SERIES, d, ok=False, note=str(e))
         d += timedelta(days=1)
+
+
+def ingest_bm_cashflows_range_parallel(
+    db_path: Path | str, start: date, end: date, max_workers: int = DEFAULT_MAX_WORKERS,
+) -> None:
+    """Same per-day bid+offer fetch as ingest_bm_cashflows_range(), but every
+    date is fetched concurrently instead of one at a time -- same rationale
+    as ingest_week_parallel()."""
+    dates = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+
+    def _one(d: date) -> None:
+        worker_conn = connect(db_path)
+        try:
+            try:
+                rows: list[BmCashflowRow] = []
+                for bid_offer in ("bid", "offer"):
+                    for r in elexon_bm.fetch_cashflows(d, bid_offer):
+                        rows.append(
+                            BmCashflowRow(
+                                sd=date.fromisoformat(r["settlementDate"]),
+                                sp=r["settlementPeriod"],
+                                national_grid_bm_unit=r["nationalGridBmUnit"],
+                                bid_offer=bid_offer,
+                                total_cashflow=r["totalCashflow"],
+                            )
+                        )
+                upsert_bm_cashflows(worker_conn, rows)
+                log_fetch(worker_conn, BM_CASHFLOW_SERIES, d, ok=True, note=f"ok ({len(rows)} rows)")
+            except Exception as e:  # noqa: BLE001 -- one bad day must not stop the rest
+                log_fetch(worker_conn, BM_CASHFLOW_SERIES, d, ok=False, note=str(e))
+        finally:
+            worker_conn.close()
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        list(pool.map(_one, dates))

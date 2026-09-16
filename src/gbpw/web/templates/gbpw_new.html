@@ -10,9 +10,9 @@
 
 <h1>Build a report for another week.</h1>
 <p class="byline">Pick any past Sunday and this fetches real Elexon data for that week (plus 37 days of
-trailing history, for the 30-day median spread figure) and builds the report from it. Ingest and build
-run for real against Elexon's API, so this can take a minute or two &mdash; the page will redirect to
-the finished report when it's done.</p>
+trailing history, for the 30-day median spread figure) and builds the report from it. Ingest fetches
+every day's data concurrently, so this usually takes well under a minute &mdash; the page will redirect
+to the finished report when it's done.</p>
 
 {% if error %}
 <div class="form-error">{{ error }}</div>
@@ -41,17 +41,18 @@ the finished report when it's done.</p>
 <script>
 // This is a plain GET form -- a real full-page navigation, not fetch/AJAX
 // -- so the browser doesn't unload this page until the /gbpw/build
-// response starts arriving, which can take a few minutes (real Elexon
-// ingest, not simulated). Without this, that whole wait looks identical
-// to the page just doing nothing -- confirmed live: a user has no way to
-// tell "still working" from "broken" during that window.
+// response starts arriving. Ingest is parallelized now (usually well under
+// a minute), but it's still a real network-bound wait, not instant --
+// without this, that whole wait looks identical to the page just doing
+// nothing -- confirmed live earlier (before parallelizing ingest) that a
+// user has no way to tell "still working" from "broken" during that window.
 document.getElementById('buildform').addEventListener('submit', function (e) {
   if (!e.target.checkValidity()) return; // let native validation block/prompt as usual
   var btn = document.getElementById('buildbtn');
   btn.disabled = true;
   btn.textContent = 'Building…';
   document.getElementById('buildhint').textContent =
-    'Fetching real data from Elexon and building the report -- this can take a few minutes. ' +
+    'Fetching real data from Elexon and building the report -- usually well under a minute. ' +
     'Please keep this tab open; it will redirect automatically when done.';
 });
 </script>

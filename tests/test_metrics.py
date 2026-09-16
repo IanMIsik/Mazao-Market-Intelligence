@@ -70,16 +70,64 @@ def test_build_week_happy_path(tmp_path):
     # periods above £100: only the two 200 periods on Wednesday
     assert facts["totals"]["periods_above_100_week"] == 2
 
+    # a fully complete week has no day-ahead gaps to disclose
+    assert facts["day_ahead_gaps"] == []
 
-def test_build_week_raises_on_missing_periods(tmp_path):
+
+def test_build_week_raises_on_missing_strict_series_periods(tmp_path):
+    # imbalance/wind/total_generation/demand gaps stay fatal -- almost
+    # always a real ingest problem, unlike day_ahead (see
+    # test_build_week_tolerates_partial_day_ahead below).
     conn = connect(tmp_path / "test.db")
     dates = week_dates(WEEK_ENDING)
     day_ahead_by_day = [[50.0] * 48 for _ in range(7)]
     _seed_full_week(conn, dates, day_ahead_by_day)
 
-    # delete one period from one day to simulate a gap
     conn.execute(
-        "DELETE FROM prices WHERE series='day_ahead' AND sd=? AND sp=48",
+        "DELETE FROM prices WHERE series='imbalance' AND sd=? AND sp=48",
+        (dates[3].isoformat(),),
+    )
+    conn.commit()
+
+    with pytest.raises(IncompleteWeekError):
+        build_week(conn, WEEK_ENDING)
+
+
+def test_build_week_tolerates_partial_day_ahead(tmp_path):
+    # A day_ahead gap (Elexon's MID providers genuinely recording no priced
+    # trade for a period -- confirmed live, see metrics.py's STRICT_SERIES
+    # comment) must not block the whole week from rendering, unlike a gap
+    # in any of the STRICT_SERIES.
+    conn = connect(tmp_path / "test.db")
+    dates = week_dates(WEEK_ENDING)
+    day_ahead_by_day = [[50.0] * 48 for _ in range(7)]
+    _seed_full_week(conn, dates, day_ahead_by_day)
+
+    conn.execute(
+        "DELETE FROM prices WHERE series='day_ahead' AND sd=? AND sp IN (47, 48)",
+        (dates[3].isoformat(),),
+    )
+    conn.commit()
+
+    facts = build_week(conn, WEEK_ENDING)  # must not raise
+
+    assert facts["day_ahead_gaps"] == [
+        {"date": dates[3].isoformat(), "expected": 48, "missing_periods": [47, 48]}
+    ]
+    assert facts["days"][3]["periods"] == 46  # the per-day figures reflect what was actually priced
+
+
+def test_build_week_raises_when_day_ahead_entirely_missing_for_a_day(tmp_path):
+    # A day with SOME day_ahead periods is tolerated (above); a day with
+    # ZERO is the one case that still blocks -- there's no average to
+    # compute from nothing.
+    conn = connect(tmp_path / "test.db")
+    dates = week_dates(WEEK_ENDING)
+    day_ahead_by_day = [[50.0] * 48 for _ in range(7)]
+    _seed_full_week(conn, dates, day_ahead_by_day)
+
+    conn.execute(
+        "DELETE FROM prices WHERE series='day_ahead' AND sd=?",
         (dates[3].isoformat(),),
     )
     conn.commit()

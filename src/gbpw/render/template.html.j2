@@ -243,6 +243,9 @@ the daily mean, which is when a battery charges. Red is above it.</p>
     <dt>Sources</dt><dd>Elexon Insights (MID, DISEBSP, FUELHH, INDO). Day-ahead reference is Elexon's Market Index Data, volume-weighted across reporting providers.</dd>
     <dt>Time basis</dt><dd>Settlement periods 1 to 48, Europe/London. Clock-change days carry 46 or 50 periods.</dd>
     <dt>Data vintage</dt><dd>{{ run_basis }} Extracted {{ extracted_display }}.</dd>
+    {% if day_ahead_gaps %}
+    <dt>Day-ahead coverage</dt><dd>{% for g in day_ahead_gaps %}{{ g.date }}: {{ g.expected - g.missing_periods|length }} of {{ g.expected }} periods ({{ g.missing_periods|length }} had no priced trade from either MID provider){% if not loop.last %}. {% endif %}{% endfor %}. Figures for these days are computed from the periods that were priced.</dd>
+    {% endif %}
     <dt>Spread method</dt><dd>Best 1-hour spread is the mean of the two highest periods less the two lowest, within the same day. No cycling limits, degradation or round-trip losses applied.</dd>
     <dt>Status</dt><dd>Indicative market commentary. Not a basis for trading decisions and not an offer or recommendation.</dd>
   </dl>

@@ -47,6 +47,7 @@ so the primary key still applies uniformly.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -193,6 +194,20 @@ class BmCashflowRow:
     total_cashflow: float
 
 
+# Guards the WAL-mode switch + schema creation below, not regular
+# reads/writes. Those two are one-time setup per database file and
+# collided for real under concurrent first-time connect() calls (the
+# *_parallel ingest functions each open their own connection from a
+# ThreadPoolExecutor worker) -- confirmed live via a failing test:
+# multiple threads racing PRAGMA journal_mode=WAL against a brand-new
+# database file raised "database is locked" immediately, not after
+# waiting out the busy_timeout below, so the timeout alone didn't cover
+# it. A plain in-process lock sidesteps the race entirely rather than
+# trying to tune retry/backoff around SQLite's exact locking semantics
+# for a mode-changing PRAGMA specifically.
+_SETUP_LOCK = threading.Lock()
+
+
 def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -204,8 +219,9 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     # the brief windows where two writers really do collide, instead of
     # raising "database is locked".
     conn = sqlite3.connect(db_path, timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.executescript(SCHEMA)
+    with _SETUP_LOCK:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript(SCHEMA)
     return conn
 
 

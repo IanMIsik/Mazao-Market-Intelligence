@@ -46,6 +46,12 @@ def build_report(
     regenerate: bool = False,
 ) -> Path:
     facts = build_week(conn, week_ending)
+    if facts["day_ahead_gaps"]:
+        for gap in facts["day_ahead_gaps"]:
+            logger.info(
+                "week=%s day_ahead gap: %s missing periods %s (no priced MID trade -- see footer disclosure)",
+                week_ending.isoformat(), gap["date"], gap["missing_periods"],
+            )
     existing = get_report(conn, week_ending)
 
     narrative, source = _select_narrative(facts, existing, regenerate)
