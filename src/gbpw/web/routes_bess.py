@@ -43,6 +43,14 @@ def bess_page(request: Request, window: int = 7, db: sqlite3.Connection = Depend
     dist = eac_metrics.distribution(db, start, end)
     activity = bm_metrics.bm_activity(db, start, end)
 
+    # Independent of `window` above by design -- see the plan this shipped
+    # from. The window picker drives EAC summary + BM activity together;
+    # "today's auctions" is EAC-only and meant to be glanced at repeatedly
+    # through the day, so it must not move when someone picks a different
+    # window to analyze trends with.
+    today = date.today()
+    today_summary = eac_metrics.market_summary(db, today, today)
+
     context = {
         "request": request,
         "active_nav": "bess",
@@ -53,6 +61,9 @@ def bess_page(request: Request, window: int = 7, db: sqlite3.Connection = Depend
         "summary": summary,
         "dist": dist,
         "activity": activity,
+        "today": today,
+        "today_summary": today_summary,
+        "today_summary_svg": charts_bess.market_summary_bars_svg(today_summary["by_service_type"]),
         "service_types": [r["service_type"] for r in summary["by_service_type"]],
         "market_summary_svg": charts_bess.market_summary_bars_svg(summary["by_service_type"]),
         "distribution_svg": charts_bess.distribution_histogram_svg(dist),

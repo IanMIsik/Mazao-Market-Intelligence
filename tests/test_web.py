@@ -84,6 +84,35 @@ def test_bess_page_empty_state_when_no_eac_data(tmp_path):
     assert "No Balancing Mechanism cashflow matched" in r.text
 
 
+def test_bess_page_today_card_empty_state_when_nothing_cleared_today(tmp_path):
+    # _eac_row() defaults to EAC_START (a fixed historical date), so a
+    # normal seeded page has no data for "today" -- no special setup needed.
+    conn = connect(tmp_path / "test.db")
+    upsert_eac_results(conn, [_eac_row()])
+    client = _client(tmp_path / "test.db")
+    r = client.get("/bess")
+    assert r.status_code == 200
+    assert "Today's auctions" in r.text
+    assert "No EAC auctions have cleared yet today." in r.text
+
+
+def test_bess_page_today_card_shows_real_data_and_is_independent_of_window(tmp_path):
+    today = date.today()
+    conn = connect(tmp_path / "test.db")
+    upsert_eac_results(conn, [
+        _eac_row(neso_id=1, auction_unit="AUNIT01", participant="Alpha Energy", sd=today,
+                  delivery_start=f"{today.isoformat()}T00:00:00", delivery_end=f"{today.isoformat()}T00:30:00"),
+    ])
+    client = _client(tmp_path / "test.db")
+
+    for window in (7, 30, 90):
+        r = client.get(f"/bess?window={window}")
+        assert r.status_code == 200
+        assert "Today's auctions" in r.text
+        assert "No EAC auctions have cleared yet today." not in r.text
+        assert "1 participant(s) have cleared at least one EAC service so far today." in r.text
+
+
 def test_gbpw_weekly_page_renders_from_stored_report(tmp_path):
     conn = connect(tmp_path / "test.db")
     _seed_gbpw_report(conn)

@@ -28,6 +28,20 @@
 <p class="byline">The page opens on market-wide totals. Search for a participant below to add them
 and see their own EAC and Balancing Mechanism activity in detail.</p>
 
+<div class="today-card">
+  <div class="today-card-head">
+    <h2>Today's auctions &mdash; {{ today.strftime('%a %d %b %Y') }}</h2>
+    <span class="section-note">Independent of the window below &mdash; a live, partial picture
+    that fills in as today's settlement periods clear, not a final tally.</span>
+  </div>
+  {% if today_summary.by_service_type %}
+  {{ today_summary_svg | safe }}
+  <p class="section-note">{{ today_summary.participants_active }} participant(s) have cleared at least one EAC service so far today.</p>
+  {% else %}
+  <div class="empty-state">No EAC auctions have cleared yet today.</div>
+  {% endif %}
+</div>
+
 <div class="filters">
   <div class="row">
     <div class="flabel">Participant</div>
