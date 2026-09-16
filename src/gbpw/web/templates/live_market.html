@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Live market | Mazao Consulting{% endblock %}
+
+{% block extra_head %}
+<!-- Same reasoning as BESS Analytics' meta refresh: this page is only
+     useful if it's current, and a plain reload on the same URL is the
+     simplest way to guarantee that. 1800s = 30 minutes, matching BESS. -->
+<meta http-equiv="refresh" content="1800">
+{% endblock %}
+
+{% block content %}
+
+<header>
+  <div class="brand2">Live market</div>
+  <div class="stamp num">{{ today.strftime('%a %d %b %Y') }}</div>
+</header>
+
+<h1>GB power fundamentals, live today and the week so far.</h1>
+<p class="byline">
+  {% if week_range %}
+  Monday {{ week_range[0].strftime('%d %b') }} through yesterday, plus today's progression as
+  settlement periods clear.
+  {% else %}
+  It's Monday &mdash; the week's just started, so only today's progression is shown below.
+  {% endif %}
+  Today's figures are a live, partial picture, not a final tally.
+</p>
+
+{% for p in panels %}
+<div class="today-card">
+  <div class="today-card-head">
+    <h2>{{ p.label }}</h2>
+    <span class="section-note">
+      {% if p.today.latest_value is not none %}
+      Latest: <strong class="num" style="color:var(--navy);">{{ p.today.latest_value|commas(2) }} {{ p.unit }}</strong> (SP{{ p.today.latest_sp }})
+      {% else %}
+      No data yet today
+      {% endif %}
+    </span>
+  </div>
+
+  {% if p.today_svg %}
+  {{ p.today_svg | safe }}
+  {% else %}
+  <div class="empty-state">No {{ p.label|lower }} published yet today.</div>
+  {% endif %}
+
+  {% if p.days %}
+  <table style="margin-top:14px;">
+    <caption>{{ p.label }}, Monday&ndash;yesterday</caption>
+    <thead>
+      <tr><th scope="col" style="text-align:left">Day</th><th scope="col">Avg</th><th scope="col">Peak</th><th scope="col">Trough</th></tr>
+    </thead>
+    <tbody>
+      {% for d in p.days %}
+      <tr>
+        <th scope="row">{{ d.date }}</th>
+        {% if d.periods > 0 %}
+        <td>{{ d.avg|commas(2) }}</td><td>{{ d.peak|commas(2) }}</td><td>{{ d.trough|commas(2) }}</td>
+        {% else %}
+        <td colspan="3" style="color:var(--muted);">no data</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% endblock %}

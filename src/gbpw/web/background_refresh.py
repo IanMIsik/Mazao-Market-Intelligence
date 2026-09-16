@@ -1,13 +1,17 @@
 """
-Periodic re-ingest of EAC + BM data for BESS Analytics.
+Periodic re-ingest for pages that need to look current between explicit
+report builds: EAC + BM data for BESS Analytics, and today's core Elexon
+series (day-ahead, imbalance, wind, demand) for the Live Market page.
 
-The page's own meta refresh (see bess_analytics.html) only shows fresh data
-if something is actually re-fetching it -- EAC clears daily and BM cashflow
-settles continuously, so a page left open can go stale within one session
-otherwise. A lightweight daemon thread, not a new scheduler dependency:
-reuses the same ThreadPoolExecutor-based parallel ingest functions built
-for GB Power Weekly's report build, just pointed at a short trailing window
-instead of a whole report's history.
+Each page's own meta refresh (see bess_analytics.html, live_market.html)
+only shows fresh data if something is actually re-fetching it -- EAC
+clears daily, BM cashflow settles continuously, and today's settlement
+periods keep clearing all day, so a page left open can go stale within one
+session otherwise. A lightweight daemon thread, not a new scheduler
+dependency: reuses the same ThreadPoolExecutor-based parallel ingest
+functions built for GB Power Weekly's report build, just pointed at a
+short trailing window (or, for Live Market, just today) instead of a
+whole report's history.
 """
 
 from __future__ import annotations
@@ -17,26 +21,38 @@ import threading
 from datetime import date, timedelta
 from pathlib import Path
 
-from ..ingest import ingest_bm_cashflows_range_parallel, ingest_bmu_reference, ingest_eac_range_parallel
+from ..ingest import (
+    ingest_bm_cashflows_range_parallel,
+    ingest_bmu_reference,
+    ingest_eac_range_parallel,
+    ingest_week_parallel,
+)
 from ..storage import connect
 
 logger = logging.getLogger("gbpw.web.background_refresh")
 
-DEFAULT_INTERVAL_SECONDS = 1800  # 30 minutes, matches the page's own meta refresh
+DEFAULT_INTERVAL_SECONDS = 1800  # 30 minutes, matches both pages' own meta refresh
 TRAILING_WINDOW_DAYS = 3  # EAC/BM data for the last few days can still be revised
 
 
 def _refresh_once(db_path: Path) -> None:
-    end = date.today()
-    start = end - timedelta(days=TRAILING_WINDOW_DAYS)
+    today = date.today()
+    start = today - timedelta(days=TRAILING_WINDOW_DAYS)
+
     conn = connect(db_path)
     try:
         ingest_bmu_reference(conn)
     finally:
         conn.close()
-    ingest_eac_range_parallel(db_path, start, end)
-    ingest_bm_cashflows_range_parallel(db_path, start, end)
-    logger.info("background refresh: re-ingested EAC + BM cashflows for %s..%s", start, end)
+    ingest_eac_range_parallel(db_path, start, today)
+    ingest_bm_cashflows_range_parallel(db_path, start, today)
+    logger.info("background refresh: re-ingested EAC + BM cashflows for %s..%s", start, today)
+
+    # Live Market only ever shows *today* live (the rest of its "week so
+    # far" is already-settled data GB Power Weekly's own ingest covers) --
+    # a single date is enough here, unlike the trailing window above.
+    ingest_week_parallel(db_path, [today])
+    logger.info("background refresh: re-ingested today's day-ahead/imbalance/wind/demand for %s", today)
 
 
 def start_background_refresh(db_path: Path, interval_seconds: int = DEFAULT_INTERVAL_SECONDS) -> threading.Event:

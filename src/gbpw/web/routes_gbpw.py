@@ -109,7 +109,7 @@ def _week_nav_bar(weeks: list[dict], current: date) -> str:
     <nav>
       <a href="/gbpw" class="on">GB Power Weekly</a>
       <a href="/bess">BESS Analytics</a>
-      <a class="soon">Live market<span>soon</span></a>
+      <a href="/live">Live market</a>
       <a class="soon">PPA tools<span>soon</span></a>
     </nav>
     <div class="webnav-tools">

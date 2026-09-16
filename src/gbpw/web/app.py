@@ -15,7 +15,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..storage import DEFAULT_DB_PATH
-from . import routes_bess, routes_gbpw
+from . import routes_bess, routes_gbpw, routes_live
 from .background_refresh import start_background_refresh
 from .deps import get_db, make_get_db
 
@@ -36,6 +36,7 @@ def create_app(db_path: Path = DEFAULT_DB_PATH) -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(routes_gbpw.router)
     app.include_router(routes_bess.router)
+    app.include_router(routes_live.router)
     # BESS Analytics' own meta refresh (bess_analytics.html) only shows
     # fresh data if something is re-fetching it -- this is that something.
     app.state.background_refresh_stop = start_background_refresh(db_path)

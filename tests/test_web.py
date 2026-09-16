@@ -250,3 +250,35 @@ def test_index_redirects_to_bess(tmp_path):
     r = client.get("/", follow_redirects=False)
     assert r.status_code in (302, 307)
     assert r.headers["location"] == "/bess"
+
+
+def test_live_market_page_empty_state_with_no_data(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/live")
+    assert r.status_code == 200
+    assert "Live market" in r.text
+    assert "No day-ahead price published yet today." in r.text
+
+
+def test_live_market_page_shows_todays_latest_value(tmp_path):
+    today = date.today()
+    conn = connect(tmp_path / "test.db")
+    upsert_prices(conn, [
+        PriceRow("day_ahead", today, 1, "NA", 123.45),
+        PriceRow("day_ahead", today, 2, "NA", 150.0),
+    ])
+    client = _client(tmp_path / "test.db")
+    r = client.get("/live")
+    assert r.status_code == 200
+    assert "150.00" in r.text  # latest (SP2), not the SP1 value
+    assert "SP2" in r.text
+
+
+def test_live_market_nav_link_is_live(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/live")
+    assert 'href="/live" class="on"' in r.text
