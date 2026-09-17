@@ -68,6 +68,13 @@
       {% else %}<div class="v">&mdash;</div><div class="delta flat">no data yet today</div>{% endif %}
     </div>
     <div class="lm-kpi">
+      <div class="k" title="Wind output plus capacity instructed off via the Balancing Mechanism -- lags real time by ~18 minutes, Elexon's own bid-acceptance publish delay">Wind + curtailed, latest</div>
+      {% if wind_true_cmp.latest_actual is not none %}
+      <div class="v">{{ (wind_true_cmp.latest_actual / 1000)|commas(2) }} <small>GW</small></div>
+      <div class="delta flat">SP{{ wind_true_cmp.latest_sp }}</div>
+      {% else %}<div class="v">&mdash;</div><div class="delta flat">not published yet</div>{% endif %}
+    </div>
+    <div class="lm-kpi">
       <div class="k">Solar output, latest</div>
       {% if solar_cmp.latest_actual is not none %}
       <div class="v">{{ (solar_cmp.latest_actual / 1000)|commas(2) }} <small>GW</small></div>
@@ -85,17 +92,21 @@
 
   <div class="lm-panels">
     <div class="lm-card">
-      <div class="lm-card-title">Wind: actual vs forecast</div>
-      <div class="lm-card-sub">today so far, MW &middot; forecast is the latest-published WINDFOR vintage</div>
+      <div class="lm-card-title">Wind: actual, actual+curtailed &amp; forecast</div>
+      <div class="lm-card-sub">today so far, MW &middot; "actual+curtailed" adds capacity instructed off via the
+      Balancing Mechanism and lags real time by ~18 minutes (Elexon's own bid-acceptance publish delay), so it
+      trails plain actual by a period or two &middot; forecast is the latest-published WINDFOR vintage</div>
       <div class="lm-legend">
         <span><i style="background:var(--lm-teal);"></i>Actual</span>
+        <span><i style="background:var(--lm-violet);"></i>Actual+curtailed</span>
         <span><i class="dashed"></i>Forecast</span>
       </div>
-      {% if wind_cmp_svg %}{{ wind_cmp_svg | safe }}{% else %}<div class="lm-empty">No wind data published yet today.</div>{% endif %}
+      {% if wind_triple_svg %}{{ wind_triple_svg | safe }}{% else %}<div class="lm-empty">No wind data published yet today.</div>{% endif %}
     </div>
     <div class="lm-card">
       <div class="lm-card-title">Demand: actual vs forecast</div>
-      <div class="lm-card-sub">today so far, MW &middot; forecast is the latest-published NDF vintage</div>
+      <div class="lm-card-sub">today so far, MW &middot; actual is the Indicative National Demand Outturn (INDO)
+      &middot; forecast is the latest-published National Demand Forecast (NDF) vintage</div>
       <div class="lm-legend">
         <span><i style="background:var(--lm-violet);"></i>Actual</span>
         <span><i class="dashed"></i>Forecast</span>

@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS bm_unit_reference (
     lead_party_name          TEXT,
     bm_unit_type              TEXT,
     generation_capacity_mw    REAL,
+    fuel_type                 TEXT,
     fetched_at                TEXT NOT NULL
 );
 
@@ -183,6 +184,7 @@ class BmUnitReferenceRow:
     lead_party_name: str | None
     bm_unit_type: str | None
     generation_capacity_mw: float | None
+    fuel_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -222,7 +224,21 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     with _SETUP_LOCK:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
+        _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Column additions to a table that already existed before that
+    column was introduced -- CREATE TABLE IF NOT EXISTS in SCHEMA above
+    only covers a brand-new database file, not one a prior version of
+    this app already created. Guarded by PRAGMA table_info so this is a
+    no-op once the column exists, same idempotency as the rest of setup.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(bm_unit_reference)")}
+    if "fuel_type" not in cols:
+        conn.execute("ALTER TABLE bm_unit_reference ADD COLUMN fuel_type TEXT")
+    conn.commit()
 
 
 def upsert_prices(conn: sqlite3.Connection, rows: Iterable[PriceRow], fetched_at: datetime | None = None) -> int:
@@ -293,31 +309,60 @@ def upsert_eac_results(conn: sqlite3.Connection, rows: Iterable[EacRow], fetched
 
 
 def upsert_bm_unit_reference(
-    conn: sqlite3.Connection, rows: Iterable[BmUnitReferenceRow], fetched_at: datetime | None = None
+    conn: sqlite3.Connection,
+    rows: Iterable[BmUnitReferenceRow],
+    fetched_at: datetime | None = None,
+    overwrite_fuel_type: bool = False,
 ) -> int:
+    """`overwrite_fuel_type=False` (the default, used by the regular live
+    reference refresh) preserves whatever fuel_type a unit already has and
+    only fills it in when it was NULL -- the live bmunits API's own
+    fuelType field is ~81% null and occasionally coarser than the
+    spreadsheet-derived value (see ingest/bmu_fuel_types.py), so a routine
+    refresh must never silently erase a better answer that was already
+    there. `overwrite_fuel_type=True` (used only by the one-off
+    "recreate the fuel type list" load) is authoritative and replaces it
+    outright -- that command's entire point is to refresh this mapping.
+    """
     fetched_at = fetched_at or datetime.now(timezone.utc)
     ts = fetched_at.isoformat()
     data = [
-        (r.national_grid_bm_unit, r.elexon_bm_unit, r.lead_party_name, r.bm_unit_type, r.generation_capacity_mw, ts)
+        (r.national_grid_bm_unit, r.elexon_bm_unit, r.lead_party_name, r.bm_unit_type,
+         r.generation_capacity_mw, r.fuel_type, ts)
         for r in rows
     ]
+    fuel_type_sql = "excluded.fuel_type" if overwrite_fuel_type else "COALESCE(bm_unit_reference.fuel_type, excluded.fuel_type)"
     conn.executemany(
-        """
+        f"""
         INSERT INTO bm_unit_reference (
             national_grid_bm_unit, elexon_bm_unit, lead_party_name, bm_unit_type,
-            generation_capacity_mw, fetched_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            generation_capacity_mw, fuel_type, fetched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (national_grid_bm_unit) DO UPDATE SET
             elexon_bm_unit = excluded.elexon_bm_unit,
             lead_party_name = excluded.lead_party_name,
             bm_unit_type = excluded.bm_unit_type,
             generation_capacity_mw = excluded.generation_capacity_mw,
+            fuel_type = {fuel_type_sql},
             fetched_at = excluded.fetched_at
         """,
         data,
     )
     conn.commit()
     return len(data)
+
+
+def wind_elexon_units(conn: sqlite3.Connection) -> set[str]:
+    """Every elexon_bm_unit currently classified WIND -- the join key
+    wind curtailment (ingest/wind_curtailment.py) needs to match against
+    ISPSTACK's own `id` field, which is elexon_bm_unit-keyed, not
+    national_grid_bm_unit-keyed (confirmed live, same join-key mismatch
+    documented for EBOCF/ISPSTACK elsewhere in this project).
+    """
+    rows = conn.execute(
+        "SELECT elexon_bm_unit FROM bm_unit_reference WHERE fuel_type = 'WIND' AND elexon_bm_unit IS NOT NULL"
+    ).fetchall()
+    return {r[0] for r in rows}
 
 
 def upsert_bm_cashflows(

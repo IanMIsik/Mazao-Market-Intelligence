@@ -31,13 +31,56 @@ and see their own EAC and Balancing Mechanism activity in detail.</p>
 
 <div class="today-card">
   <div class="today-card-head">
-    <h2>Today's auctions &mdash; {{ today.strftime('%a %d %b %Y') }}</h2>
-    <span class="section-note">Independent of the window below &mdash; a live, partial picture
-    that fills in as today's settlement periods clear, not a final tally.</span>
+    <h2>Today's EAC revenue &mdash; {{ today.strftime('%a %d %b %Y') }}</h2>
+    <span class="section-note">Independent of the window below &mdash; a live, partial picture,
+    not a final tally. Click a segment for its own figures, click elsewhere to reset.</span>
   </div>
-  {% if today_summary.by_service_type %}
-  {{ today_summary_svg | safe }}
-  <p class="section-note">{{ today_summary.participants_active }} participant(s) have cleared at least one EAC service so far today.</p>
+  {% if today_revenue.by_participant %}
+  <div class="kpis" id="revenue-kpis">
+    <div class="kpi">
+      <div class="k">Market revenue</div>
+      <div class="v num" id="kpi-revenue">£{{ today_revenue.total_revenue_gbp|commas(2) }}</div>
+    </div>
+    <div class="kpi">
+      <div class="k">Avg clearing price</div>
+      <div class="v num" id="kpi-avg-price">
+        {% if today_revenue.avg_clearing_price is not none %}£{{ today_revenue.avg_clearing_price|commas(2) }}/MW/h{% else %}&mdash;{% endif %}
+      </div>
+    </div>
+    <div class="kpi">
+      <div class="k">Market participants</div>
+      <div class="v num" id="kpi-participants">{{ today_revenue.participants_active }}</div>
+    </div>
+  </div>
+
+  <div class="donut-row">
+    <div class="donut-wrap">
+      {{ today_revenue_svg | safe }}
+      <div class="donut-selected-label" id="donut-selected-label">All participants</div>
+    </div>
+    <div class="donut-legend">
+      {% for entry in today_revenue_legend %}
+      <div class="legend-item"><span class="swatch" style="background:{{ entry.color }};"></span>{{ entry.participant }}<span class="pct">{{ entry.pct|commas(1) }}%</span></div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <details>
+    <summary>Methodology &amp; scope</summary>
+    <p class="section-note">Cleared volume &times; clearing price &times; settlement-period length
+    (clearingPrice is published as £/MW/h, not a flat per-period rate) &mdash; not volume alone.
+    Scoped to <strong>Batteries</strong> only, same as the rest of this page &mdash; NESO's own
+    published aggregates cover every technology, so they won't match this figure directly. An EFA
+    block starting at 22:00 the previous day has its revenue split across both calendar days by
+    settlement period, not attributed whole to a single day.
+    {% if non_positive_participants %}
+    {{ non_positive_participants|length }} participant(s) had zero or net-negative revenue today (a
+    unit can be paid a negative clearing price to provide response) &mdash; not shown as chart
+    segments, since a donut can't represent a negative share of a whole: combined
+    £{{ non_positive_total_gbp|commas(2) }}.
+    {% endif %}
+    </p>
+  </details>
   {% else %}
   <div class="empty-state">No EAC auctions have cleared yet today.</div>
   {% endif %}
@@ -360,6 +403,68 @@ Cashflow only &mdash; accepted bid/offer volumes (MWh) need a separate ISPSTACK 
 
   svcChips.forEach(function (chip) {
     chip.addEventListener('click', function () { chip.classList.toggle('active'); renderTables(); });
+  });
+
+  render();
+})();
+</script>
+<script>
+(function () {
+  var svg = document.getElementById('revenue-donut');
+  if (!svg) return;  // empty-state day -- no chart, nothing to wire up
+
+  var kpiRevenue = document.getElementById('kpi-revenue');
+  var kpiAvgPrice = document.getElementById('kpi-avg-price');
+  var kpiParticipants = document.getElementById('kpi-participants');
+  var centerLabel = document.getElementById('donut-selected-label');
+  var slices = svg.querySelectorAll('.donut-slice');
+  var selected = null;
+
+  var groupTotals = {
+    revenue: {{ today_revenue.total_revenue_gbp }},
+    avgPrice: {{ today_revenue.avg_clearing_price if today_revenue.avg_clearing_price is not none else 'null' }},
+    participants: {{ today_revenue.participants_active }}
+  };
+
+  function fmtMoney(v) { return '£' + Number(v).toLocaleString('en-GB', {maximumFractionDigits: 2}); }
+  function fmtPrice(v) { return v === null ? '—' : fmtMoney(v) + '/MW/h'; }
+
+  function render() {
+    if (selected) {
+      kpiRevenue.textContent = fmtMoney(selected.dataset.revenue);
+      kpiAvgPrice.textContent = fmtPrice(selected.dataset.avgPrice === '' ? null : Number(selected.dataset.avgPrice));
+      kpiParticipants.textContent = '1';
+      centerLabel.textContent = selected.dataset.participant;
+    } else {
+      kpiRevenue.textContent = fmtMoney(groupTotals.revenue);
+      kpiAvgPrice.textContent = fmtPrice(groupTotals.avgPrice);
+      kpiParticipants.textContent = String(groupTotals.participants);
+      centerLabel.textContent = 'All participants';
+    }
+  }
+
+  slices.forEach(function (slice) {
+    slice.addEventListener('click', function (e) {
+      e.stopPropagation();  // don't let this same click also hit the document-level reset below
+      if (selected === slice) {
+        selected.classList.remove('selected');
+        selected = null;
+      } else {
+        if (selected) selected.classList.remove('selected');
+        selected = slice;
+        selected.classList.add('selected');
+      }
+      render();
+    });
+  });
+
+  // Clicking anywhere outside the chart resets to the whole-market view.
+  document.addEventListener('click', function (e) {
+    if (selected && !svg.contains(e.target)) {
+      selected.classList.remove('selected');
+      selected = null;
+      render();
+    }
   });
 
   render();

@@ -70,6 +70,61 @@ def test_market_summary_totals_by_service_type(tmp_path):
     assert summary["participants_active"] == 3
 
 
+def test_daily_revenue_by_participant_applies_settlement_hours(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    _seed(conn)
+    revenue = eac_metrics.daily_revenue_by_participant(conn, START)
+
+    # revenue = executed_quantity * clearing_price * 0.5h (clearingPrice is
+    # published as £/MW/h, each row is one 30-minute period) -- not the raw
+    # product, and only START's rows (Beta's second row lands on END).
+    by_participant = {r["participant"]: r for r in revenue["by_participant"]}
+    assert by_participant["Alpha Energy"]["revenue_gbp"] == 55.0  # (10*5 + 6*8 + 4*3) * 0.5
+    assert by_participant["Beta Storage"]["revenue_gbp"] == 60.0  # 30*4 * 0.5
+    assert by_participant["Gamma Power"]["revenue_gbp"] == 5.0    # 5*2 * 0.5
+    assert "Delta Wind" not in by_participant  # scoped out via technology_type
+
+    # avg_clearing_price is volume-weighted (raw_sum / cleared_mw), not the
+    # revenue figure divided by anything -- same convention as leaderboard().
+    assert by_participant["Alpha Energy"]["avg_clearing_price"] == 5.5   # 110/20
+    assert by_participant["Beta Storage"]["avg_clearing_price"] == 4.0  # 120/30
+    assert by_participant["Gamma Power"]["avg_clearing_price"] == 2.0   # 10/5
+
+    # Ranked descending by revenue, not by cleared MW (Beta > Alpha here
+    # despite Alpha clearing at a higher blended price).
+    assert [r["participant"] for r in revenue["by_participant"]] == ["Beta Storage", "Alpha Energy", "Gamma Power"]
+    assert revenue["total_revenue_gbp"] == 120.0
+    assert revenue["total_cleared_mw"] == 55.0
+    assert revenue["avg_clearing_price"] == 240 / 55  # market-wide volume-weighted price, not per-participant
+    assert revenue["participants_active"] == 3
+
+
+def test_daily_revenue_by_participant_handles_negative_clearing_price(tmp_path):
+    # Confirmed live against NESO's own EAC data: clearingPrice can be
+    # negative (a unit paying to provide response) -- revenue must flow
+    # through as a real negative figure, not be clamped or dropped.
+    conn = connect(tmp_path / "test.db")
+    upsert_eac_results(conn, [
+        _row(neso_id=10, participant="Epsilon Batteries", auction_unit="AUNIT05",
+             service_type="Response", auction_product="DRH", executed_quantity=32.0, clearing_price=-14.99),
+    ])
+    revenue = eac_metrics.daily_revenue_by_participant(conn, START)
+    epsilon = next(r for r in revenue["by_participant"] if r["participant"] == "Epsilon Batteries")
+    assert epsilon["revenue_gbp"] == 32.0 * -14.99 * 0.5
+    assert epsilon["revenue_gbp"] < 0
+
+
+def test_daily_revenue_by_participant_empty_day_returns_zeros(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    _seed(conn)
+    revenue = eac_metrics.daily_revenue_by_participant(conn, date(2030, 1, 1))
+    assert revenue["by_participant"] == []
+    assert revenue["total_revenue_gbp"] == 0.0
+    assert revenue["total_cleared_mw"] == 0.0
+    assert revenue["avg_clearing_price"] is None
+    assert revenue["participants_active"] == 0
+
+
 def test_market_summary_response_band_split(tmp_path):
     conn = connect(tmp_path / "test.db")
     _seed(conn)

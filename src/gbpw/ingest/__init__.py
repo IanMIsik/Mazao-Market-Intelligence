@@ -5,8 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
 
-from . import eac, elexon, elexon_bm, entsoe_flows, neso_embedded, pvlive, semo_flows
-from ..settlement import week_dates
+from . import eac, elexon, elexon_bm, entsoe_flows, neso_embedded, pvlive, semo_flows, wind_curtailment
+from ..settlement import bid_data_published, week_dates
 from ..storage import (
     BmCashflowRow,
     BmUnitReferenceRow,
@@ -16,6 +16,7 @@ from ..storage import (
     upsert_bm_unit_reference,
     upsert_eac_results,
     upsert_prices,
+    wind_elexon_units,
 )
 
 # Every fetch_* call is a blocking HTTP request (requests releases the GIL
@@ -255,6 +256,43 @@ def ingest_interconnector_scheduled(conn: sqlite3.Connection, today: date) -> No
         log_fetch(conn, "interconnector_scheduled_semo", today, ok=False, note=str(e))
 
 
+def ingest_wind_curtailment(conn: sqlite3.Connection, today: date) -> None:
+    """Instructed-shut wind volume for today (see wind_curtailment.py),
+    stored as its own series (wind_curtailed_mw) rather than mutating
+    `wind` itself -- GB Power Weekly's wind-share-of-generation figures
+    read `wind` as actual metered generation and must keep meaning that;
+    Live Market's own display layer (live_market_metrics.
+    actual_plus_addon_vs_forecast()) is what adds the two together for a
+    "true" wind outturn view.
+
+    Deliberately not folded into ingest_day(): ISPSTACK has no bulk
+    multi-period endpoint (one call per settlement period), and GB Power
+    Weekly's historical report backfills have no use for that per-period
+    cost across dozens of unrelated past dates -- same reasoning as
+    ingest_interconnector_scheduled(). Only attempts settlement periods
+    `wind` already has real data for today (queried fresh here, not
+    assumed) -- but which of those actually get stored is decided inside
+    fetch_wind_curtailment() from the real response (a period Elexon
+    hasn't published yet comes back completely empty, not just empty
+    after filtering to wind), not from a fixed time estimate.
+    bid_data_published() is only used here to skip periods that are
+    obviously still in the future -- a cheap way to avoid firing off
+    calls we're confident would be empty, not the thing that decides
+    correctness.
+    """
+    try:
+        sp_rows = conn.execute(
+            "SELECT DISTINCT sp FROM prices WHERE series = 'wind' AND sd = ?", (today.isoformat(),)
+        ).fetchall()
+        periods = sorted(r[0] for r in sp_rows if bid_data_published(today, r[0]))
+        wind_units = wind_elexon_units(conn)
+        rows, note = wind_curtailment.fetch_wind_curtailment(today, periods, wind_units)
+        upsert_prices(conn, rows)
+        log_fetch(conn, "wind_curtailed_mw", today, ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "wind_curtailed_mw", today, ok=False, note=str(e))
+
+
 def ingest_bmu_reference(conn: sqlite3.Connection) -> None:
     """Refreshes the whole BM unit reference table. Not date-scoped -- call
     once per ingest run, not once per day. Logged under a fixed sentinel
@@ -270,6 +308,7 @@ def ingest_bmu_reference(conn: sqlite3.Connection) -> None:
                 lead_party_name=r.get("leadPartyName"),
                 bm_unit_type=r.get("bmUnitType"),
                 generation_capacity_mw=_to_float(r.get("generationCapacity")),
+                fuel_type=r.get("fuelType"),
             )
             for r in records
             if r.get("nationalGridBmUnit")

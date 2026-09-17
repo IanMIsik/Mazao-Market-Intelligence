@@ -9,6 +9,7 @@ Command-line entry point tying ingest / narrative / render / publish together.
     gbpw status     --week-ending 2026-08-30
     gbpw run        [--week-ending auto] [--out-dir out] [--regenerate]
     gbpw serve      [--host 127.0.0.1] [--port 5000] [--reload]
+    gbpw load-fuel-types --file BMUFuelType.xlsx
 
 `run` is the one-shot form meant for a scheduler: ingest the trailing window
 then build, writing to <out-dir>/gbpw-<week-ending>.html. `--week-ending auto`
@@ -25,7 +26,13 @@ same page -- refreshes the BM unit reference table, then fetches bid+offer
 cashflows day by day for the given range. Cashflow only, no accepted volumes
 yet (see ingest/elexon_bm.py).
 
-`serve` starts the FastAPI app (GB Power Weekly + BESS Analytics) via uvicorn.
+`serve` starts the FastAPI app (GB Power Weekly + BESS Analytics + Live Market) via uvicorn.
+
+`load-fuel-types` rebuilds bm_unit_reference's fuel_type column from a
+manually-downloaded NESO BM Unit Fuel Type spreadsheet merged with the live
+reference API (see ingest/bmu_fuel_types.py) -- run this whenever a fresh
+copy of that spreadsheet is downloaded. Powers wind curtailment on Live
+Market (identifying which BM units are wind, see ingest/wind_curtailment.py).
 """
 
 from __future__ import annotations
@@ -39,6 +46,7 @@ from pathlib import Path
 
 from .build import build_report, publish_report
 from .ingest import (
+    bmu_fuel_types,
     history_range as _history_range,
     ingest_bm_cashflows_range_parallel,
     ingest_bmu_reference,
@@ -47,7 +55,7 @@ from .ingest import (
 )
 from .metrics import IncompleteWeekError, build_week
 from .settlement import most_recent_sunday as _most_recent_sunday
-from .storage import DEFAULT_DB_PATH, connect, get_report
+from .storage import DEFAULT_DB_PATH, connect, get_report, upsert_bm_unit_reference
 
 logger = logging.getLogger("gbpw.cli")
 
@@ -159,6 +167,13 @@ def main(argv: list[str] | None = None) -> None:
     p_bm.add_argument("--end", type=date.fromisoformat, required=True)
     p_bm.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
+    p_fuel = sub.add_parser(
+        "load-fuel-types",
+        help="rebuild the BM unit -> fuel type mapping from NESO's fuel-type spreadsheet + the live reference API",
+    )
+    p_fuel.add_argument("--file", type=Path, required=True, help="path to the downloaded BMUFuelType*.xlsx")
+    p_fuel.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+
     p_run = sub.add_parser("run", help="ingest + build in one step, for a scheduler")
     p_run.add_argument("--week-ending", type=_week_ending_or_auto, default="auto")
     p_run.add_argument("--out-dir", type=Path, default=Path("out"))
@@ -243,6 +258,13 @@ def main(argv: list[str] | None = None) -> None:
             f"SELECT COUNT(*) FROM bm_cashflows WHERE sd IN ({placeholders})", sd_list
         ).fetchone()[0]
         print(f"Done, no failures. {count:,} row(s) on file for this range.")
+
+    elif args.command == "load-fuel-types":
+        print(f"Rebuilding BM unit fuel-type mapping from {args.file} + the live reference API...")
+        rows = bmu_fuel_types.build_fuel_type_rows(args.file)
+        n = upsert_bm_unit_reference(conn, rows, overwrite_fuel_type=True)
+        wind_count = sum(1 for r in rows if r.fuel_type == "WIND")
+        print(f"Done. {n:,} unit(s) on file, {wind_count:,} classified WIND.")
 
     elif args.command == "status":
         healthy = _print_status(conn, args.week_ending, args.history_days)

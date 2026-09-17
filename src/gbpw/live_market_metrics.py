@@ -124,3 +124,103 @@ def actual_vs_forecast(conn: sqlite3.Connection, actual_series: str, forecast_se
         "latest_sp": actual["latest_sp"],
         "points": points,
     }
+
+
+def actual_plus_addon_vs_forecast(
+    conn: sqlite3.Connection, actual_series: str, addon_series: str, forecast_series: str, today: date
+) -> dict:
+    """Same shape as actual_vs_forecast(), but "actual" at each settlement
+    period is actual_series + addon_series -- for a metric where the raw
+    reading understates the true figure and a separately-ingested addon
+    corrects it (wind + wind_curtailed_mw: FUELHH's wind generation alone
+    doesn't show capacity that was instructed off via the Balancing
+    Mechanism, see ingest/wind_curtailment.py).
+
+    A period the addon hasn't reached yet shows as missing (actual=None),
+    not silently treated as zero -- wind_curtailed_mw specifically lags
+    real time by ~18 minutes (Elexon's own bid-acceptance publish delay,
+    see settlement.bid_data_published()), so "no addon row yet" means
+    "not published yet," never "confirmed zero curtailment." This is why
+    this combined view is kept as its own chart, separate from the plain
+    actual_vs_forecast() line for the same base series -- the two update
+    on genuinely different cadences, and merging them into one line would
+    make the lag look like a data dropout in the fast-updating series.
+    """
+    actual = today_progression(conn, actual_series, today)
+    addon_loaded = series_for_week(conn, addon_series, [today])
+    addon_by_sp = {sp: v for (_sd, sp), v in addon_loaded.items()}
+    forecast_loaded = series_for_week(conn, forecast_series, [today])
+    forecast_by_sp = {sp: v for (_sd, sp), v in forecast_loaded.items()}
+
+    seen_sps = {p["sp"] for p in actual["points"]}
+    points = [
+        {
+            "sp": p["sp"],
+            "actual": round(p["value"] + addon_by_sp[p["sp"]], 2) if p["sp"] in addon_by_sp else None,
+            "forecast": round(forecast_by_sp[p["sp"]], 2) if p["sp"] in forecast_by_sp else None,
+        }
+        for p in actual["points"]
+    ]
+    for sp, v in sorted(forecast_by_sp.items()):
+        if sp not in seen_sps:
+            points.append({"sp": sp, "actual": None, "forecast": round(v, 2)})
+    points.sort(key=lambda p: p["sp"])
+
+    # "Latest" here means the latest period this combined figure can
+    # actually speak to -- the rightmost point with a real (non-None)
+    # actual -- not actual_series' own latest_sp, which will usually be
+    # ahead of it by however many periods the publish lag covers.
+    latest_sp = None
+    latest_actual = None
+    for p in reversed(points):
+        if p["actual"] is not None:
+            latest_sp, latest_actual = p["sp"], p["actual"]
+            break
+    latest_forecast = forecast_by_sp.get(latest_sp) if latest_sp is not None else None
+    return {
+        "latest_actual": latest_actual,
+        "latest_forecast": round(latest_forecast, 2) if latest_forecast is not None else None,
+        "latest_sp": latest_sp,
+        "points": points,
+    }
+
+
+def actual_and_addon_vs_forecast(
+    conn: sqlite3.Connection, actual_series: str, addon_series: str, forecast_series: str, today: date
+) -> dict:
+    """One merged set of points for a single chart showing all three:
+    raw actual, actual+addon ("combined"), and forecast -- e.g. wind vs
+    wind+curtailed vs WINDFOR, so both the fast-updating metered reading
+    and the slower, curtailment-corrected figure are visible on the same
+    axes without needing two separate cards.
+
+    `combined` is None for any period the addon hasn't published yet
+    (same lag-aware honesty as actual_plus_addon_vs_forecast() -- see
+    that function's docstring) even when `actual` itself has a real
+    value, so the two solid lines will genuinely end at different
+    settlement periods on a live, partial day. That's real, not a bug --
+    the chart (charts_live.triple_comparison_svg()) draws each its own
+    end marker rather than implying one broken series.
+    """
+    actual = today_progression(conn, actual_series, today)
+    addon_loaded = series_for_week(conn, addon_series, [today])
+    addon_by_sp = {sp: v for (_sd, sp), v in addon_loaded.items()}
+    forecast_loaded = series_for_week(conn, forecast_series, [today])
+    forecast_by_sp = {sp: v for (_sd, sp), v in forecast_loaded.items()}
+
+    seen_sps = {p["sp"] for p in actual["points"]}
+    points = [
+        {
+            "sp": p["sp"],
+            "actual": p["value"],
+            "combined": round(p["value"] + addon_by_sp[p["sp"]], 2) if p["sp"] in addon_by_sp else None,
+            "forecast": round(forecast_by_sp[p["sp"]], 2) if p["sp"] in forecast_by_sp else None,
+        }
+        for p in actual["points"]
+    ]
+    for sp, v in sorted(forecast_by_sp.items()):
+        if sp not in seen_sps:
+            points.append({"sp": sp, "actual": None, "combined": None, "forecast": round(v, 2)})
+    points.sort(key=lambda p: p["sp"])
+
+    return {"points": points}

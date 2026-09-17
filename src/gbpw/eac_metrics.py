@@ -21,6 +21,17 @@ from datetime import date
 
 DEFAULT_TECHNOLOGY = "Batteries"
 
+# NESO's own datastore field metadata for this resource (fetched live,
+# not assumed) states clearingPrice's unit as "£/MW/h" -- "the cleared
+# price per MW per hour". Every stored row is exactly one 30-minute
+# settlement period (see ingest/eac.py's expand(), which duplicates the
+# same clearing_price/executed_quantity across every period a multi-slot
+# delivery block spans, since the rate applies to each period the
+# capacity was held). So a single row's revenue contribution is
+# executed_quantity * clearing_price * SETTLEMENT_HOURS, not the raw
+# product -- omitting this factor would double the true figure.
+SETTLEMENT_HOURS = 0.5
+
 
 def _where_range(start: date, end: date, technology_type: str | None) -> tuple[str, list]:
     where = ["sd >= ?", "sd <= ?"]
@@ -83,6 +94,64 @@ def market_summary(
         "by_service_type": by_service_type,
         "response_by_band": response_by_band,
         "participants_active": participants_active,
+    }
+
+
+def daily_revenue_by_participant(
+    conn: sqlite3.Connection, day: date, technology_type: str | None = DEFAULT_TECHNOLOGY
+) -> dict:
+    """Total EAC revenue for a single day, by participant -- cleared
+    volume x clearing price x settlement-period length (see
+    SETTLEMENT_HOURS), not cleared volume alone. Scoped to exactly one day
+    (start == end) rather than a range: this backs the "Today's" card,
+    independent of the window-driven market_summary()/leaderboard() above.
+
+    Two things a naive reading of this figure gets wrong, both disclosed
+    to the caller rather than left implicit:
+    - Scoped to `technology_type` (Batteries by default) -- NOT the same
+      as NESO's own published market-wide aggregates, which cover every
+      technology.
+    - clearing_price can be genuinely negative (confirmed live -- a unit
+      can pay to provide response), so revenue_gbp per participant can be
+      negative; a pie/donut of "share of revenue" can't represent that,
+      which is why callers split out non-positive participants before
+      charting (see routes_bess.py) rather than clamping or hiding them
+      from this function's own output.
+    """
+    where, params = _where_range(day, day, technology_type)
+    rows = conn.execute(
+        f"""
+        SELECT participant, SUM(executed_quantity * clearing_price) AS raw_sum,
+               SUM(executed_quantity) AS cleared_mw
+        FROM eac_results WHERE {where}
+        GROUP BY participant ORDER BY raw_sum DESC
+        """,
+        params,
+    ).fetchall()
+
+    by_participant = []
+    total_raw_sum = 0.0
+    total_cleared_mw = 0.0
+    for p, raw_sum, cleared_mw in rows:
+        raw_sum = raw_sum or 0.0
+        cleared_mw = cleared_mw or 0.0
+        total_raw_sum += raw_sum
+        total_cleared_mw += cleared_mw
+        by_participant.append({
+            "participant": p,
+            "revenue_gbp": raw_sum * SETTLEMENT_HOURS,
+            "cleared_mw": cleared_mw,
+            "avg_clearing_price": (raw_sum / cleared_mw) if cleared_mw else None,
+        })
+
+    return {
+        "date": day.isoformat(),
+        "technology_type": technology_type,
+        "by_participant": by_participant,
+        "total_revenue_gbp": total_raw_sum * SETTLEMENT_HOURS,
+        "total_cleared_mw": total_cleared_mw,
+        "avg_clearing_price": (total_raw_sum / total_cleared_mw) if total_cleared_mw else None,
+        "participants_active": len(by_participant),
     }
 
 

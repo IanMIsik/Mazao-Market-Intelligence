@@ -49,7 +49,21 @@ def bess_page(request: Request, window: int = 7, db: sqlite3.Connection = Depend
     # through the day, so it must not move when someone picks a different
     # window to analyze trends with.
     today = date.today()
-    today_summary = eac_metrics.market_summary(db, today, today)
+    today_revenue = eac_metrics.daily_revenue_by_participant(db, today)
+
+    # A donut can't represent a negative share of a whole -- clearing_price
+    # can be genuinely negative (a unit paying to provide response), so
+    # split those out rather than clamp or hide them from today_revenue
+    # itself. Both lists stay ordered by revenue_gbp (already sorted by
+    # the metrics query), so slice[:8] below is really the top 8.
+    positive_participants = [r for r in today_revenue["by_participant"] if r["revenue_gbp"] > 0]
+    non_positive_participants = [r for r in today_revenue["by_participant"] if r["revenue_gbp"] <= 0]
+    donut_colors = charts_bess.donut_colors(len(positive_participants))
+    positive_total_gbp = sum(r["revenue_gbp"] for r in positive_participants) or 1.0
+    today_revenue_legend = [
+        {"participant": r["participant"], "color": c, "pct": r["revenue_gbp"] / positive_total_gbp * 100}
+        for r, c in zip(positive_participants[:8], donut_colors[:8])
+    ]
 
     context = {
         "request": request,
@@ -62,8 +76,11 @@ def bess_page(request: Request, window: int = 7, db: sqlite3.Connection = Depend
         "dist": dist,
         "activity": activity,
         "today": today,
-        "today_summary": today_summary,
-        "today_summary_svg": charts_bess.market_summary_bars_svg(today_summary["by_service_type"]),
+        "today_revenue": today_revenue,
+        "today_revenue_svg": charts_bess.daily_revenue_donut_svg(positive_participants),
+        "today_revenue_legend": today_revenue_legend,
+        "non_positive_participants": non_positive_participants,
+        "non_positive_total_gbp": sum(r["revenue_gbp"] for r in non_positive_participants),
         "service_types": [r["service_type"] for r in summary["by_service_type"]],
         "market_summary_svg": charts_bess.market_summary_bars_svg(summary["by_service_type"]),
         "distribution_svg": charts_bess.distribution_histogram_svg(dist),

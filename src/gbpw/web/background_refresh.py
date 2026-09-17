@@ -28,6 +28,7 @@ from ..ingest import (
     ingest_interconnector_scheduled,
     ingest_solar_forecast,
     ingest_week_parallel,
+    ingest_wind_curtailment,
 )
 from ..storage import connect
 
@@ -64,9 +65,13 @@ def _refresh_once(db_path: Path) -> None:
     try:
         ingest_solar_forecast(conn)
         ingest_interconnector_scheduled(conn, today)
+        # Must run after ingest_week_parallel() above -- it queries
+        # today's already-ingested `wind` periods to know which
+        # settlement periods are even worth an ISPSTACK call yet.
+        ingest_wind_curtailment(conn, today)
     finally:
         conn.close()
-    logger.info("background refresh: re-ingested solar forecast + scheduled interconnector flows for %s", today)
+    logger.info("background refresh: re-ingested solar forecast + scheduled interconnector flows + wind curtailment for %s", today)
 
 
 def start_background_refresh(db_path: Path, interval_seconds: int = DEFAULT_INTERVAL_SECONDS) -> threading.Event:

@@ -143,3 +143,65 @@ def test_actual_vs_forecast_empty_when_nothing_yet(tmp_path):
     conn = connect(tmp_path / "test.db")
     result = lmm.actual_vs_forecast(conn, "wind", "wind_forecast", date(2026, 9, 16))
     assert result == {"latest_actual": None, "latest_forecast": None, "latest_sp": None, "points": []}
+
+
+def test_actual_plus_addon_vs_forecast_adds_curtailment(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    today = date(2026, 9, 16)
+    upsert_prices(conn, [
+        PriceRow("wind", today, 1, "NA", 3000.0),
+        PriceRow("wind", today, 2, "NA", 3200.0),
+        PriceRow("wind_curtailed_mw", today, 1, "NA", 500.0),
+        # No curtailment row for SP2 yet (publish lag hasn't elapsed) --
+        # must show as missing, not be silently treated as zero.
+        PriceRow("wind_forecast", today, 1, "2026-09-16T00:00:00Z", 4000.0),
+        PriceRow("wind_forecast", today, 2, "2026-09-16T00:00:00Z", 4100.0),
+    ])
+
+    result = lmm.actual_plus_addon_vs_forecast(conn, "wind", "wind_curtailed_mw", "wind_forecast", today)
+
+    assert result["points"] == [
+        {"sp": 1, "actual": 3500.0, "forecast": 4000.0},
+        {"sp": 2, "actual": None, "forecast": 4100.0},
+    ]
+    # "Latest" is the rightmost period the combined figure can actually
+    # speak to (SP1), not wind's own latest_sp (SP2, addon not published yet).
+    assert result["latest_actual"] == 3500.0
+    assert result["latest_sp"] == 1
+    assert result["latest_forecast"] == 4000.0
+
+
+def test_actual_plus_addon_vs_forecast_empty_when_nothing_yet(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    result = lmm.actual_plus_addon_vs_forecast(conn, "wind", "wind_curtailed_mw", "wind_forecast", date(2026, 9, 16))
+    assert result == {"latest_actual": None, "latest_forecast": None, "latest_sp": None, "points": []}
+
+
+def test_actual_and_addon_vs_forecast_merges_all_three(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    today = date(2026, 9, 16)
+    upsert_prices(conn, [
+        PriceRow("wind", today, 1, "NA", 3000.0),
+        PriceRow("wind", today, 2, "NA", 3200.0),
+        PriceRow("wind_curtailed_mw", today, 1, "NA", 500.0),
+        # No curtailment row for SP2 yet -- "combined" must be None there
+        # even though "actual" has a real value; the two solid lines end
+        # at different points on purpose.
+        PriceRow("wind_forecast", today, 1, "2026-09-16T00:00:00Z", 4000.0),
+        PriceRow("wind_forecast", today, 2, "2026-09-16T00:00:00Z", 4100.0),
+        PriceRow("wind_forecast", today, 3, "2026-09-16T00:00:00Z", 4200.0),  # forecast-only period
+    ])
+
+    result = lmm.actual_and_addon_vs_forecast(conn, "wind", "wind_curtailed_mw", "wind_forecast", today)
+
+    assert result == {"points": [
+        {"sp": 1, "actual": 3000.0, "combined": 3500.0, "forecast": 4000.0},
+        {"sp": 2, "actual": 3200.0, "combined": None, "forecast": 4100.0},
+        {"sp": 3, "actual": None, "combined": None, "forecast": 4200.0},
+    ]}
+
+
+def test_actual_and_addon_vs_forecast_empty_when_nothing_yet(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    result = lmm.actual_and_addon_vs_forecast(conn, "wind", "wind_curtailed_mw", "wind_forecast", date(2026, 9, 16))
+    assert result == {"points": []}

@@ -42,6 +42,23 @@ h1 { font-family:var(--serif); font-weight:400; color:var(--navy);
 .today-card-head h2 { margin:0; }
 .today-card-head .section-note { margin:0; max-width:38ch; text-align:right; }
 
+.donut-row { display:flex; flex-direction:column; align-items:center; gap:16px; margin-top:10px; }
+.donut-wrap { width:50%; max-width:450px; margin:0 auto; }
+.donut-wrap svg { display:block; width:100%; height:auto; margin:0 auto; }
+.donut-slice { cursor:pointer; transition:stroke-width .12s ease, opacity .12s ease; }
+.donut-slice:hover { opacity:.85; }
+.donut-slice.selected { stroke-width:54px; }
+.donut-pct { font-size:12px; font-weight:700; fill:#fff; font-family:var(--sans); pointer-events:none; }
+.donut-selected-label { font-size:14px; font-weight:600; color:var(--navy); text-align:center; min-height:1.4em; margin-top:4px; }
+.donut-legend { display:flex; flex-wrap:wrap; justify-content:center; gap:6px 20px; font-size:12.5px;
+  color:var(--ink); max-width:640px; }
+.legend-item { display:flex; align-items:center; white-space:nowrap; }
+.legend-item .pct { color:var(--muted); margin-left:6px; font-variant-numeric:tabular-nums; }
+
+.today-card details { margin-top:8px; }
+.today-card summary { font-size:12.5px; color:var(--navy-mid); cursor:pointer; user-select:none; }
+.today-card details .section-note { margin-top:6px; }
+
 .chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:22px 28px; margin-top:18px; }
 .chart-grid .cg-label { font-size:12.5px; font-weight:600; margin-bottom:6px; }
 @media (max-width:640px) { .chart-grid { grid-template-columns:1fr; } }

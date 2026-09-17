@@ -42,6 +42,30 @@ def sp_start_utc(d: date, sp: int) -> datetime:
     return _local_midnight_utc(d) + timedelta(minutes=PERIOD_MINUTES * (sp - 1))
 
 
+def sp_end_utc(d: date, sp: int) -> datetime:
+    """UTC end instant of settlement period `sp` -- just the next period's
+    start, expressed this way so callers don't need to think about period
+    31 wrapping into the next day's SP1 themselves."""
+    return sp_start_utc(d, sp + 1)
+
+
+# Elexon publishes ISPSTACK bid-acceptance data roughly 18 minutes after a
+# settlement period's delivery ends, not at delivery itself -- confirmed
+# against real data while building wind curtailment (a just-elapsed period
+# reliably came back with zero matching rows, not because nothing was
+# curtailed but because the acceptance data simply wasn't published yet).
+BID_DATA_PUBLISH_LAG_MINUTES = 18
+
+
+def bid_data_published(d: date, sp: int, now: datetime | None = None) -> bool:
+    """Whether settlement period `sp` on `d` is old enough that its
+    ISPSTACK bid-acceptance data should have been published. `now`
+    defaults to the real current time; a fixed value is only for tests.
+    """
+    now = now or datetime.now(UTC)
+    return now >= sp_end_utc(d, sp) + timedelta(minutes=BID_DATA_PUBLISH_LAG_MINUTES)
+
+
 def utc_to_settlement(dt_utc: datetime) -> tuple[date, int]:
     """Inverse of sp_start_utc: which (settlement date, period) a UTC instant falls in."""
     if dt_utc.tzinfo is None:

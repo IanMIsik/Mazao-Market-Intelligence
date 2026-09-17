@@ -25,7 +25,10 @@ PLOT_W = 214.0
 PLOT_TOP = 18.0  # headroom above the top gridline so the unit label (drawn
                  # above the plot) never overlaps that gridline's own value
                  # label -- they used to collide when PLOT_TOP was small.
-PLOT_H = 60.0
+PLOT_H = 100.0  # tall enough that the rendered chart actually fills its
+                # card's height instead of leaving a lot of unused space
+                # below it -- a card's height is mostly set by its title/
+                # subtitle/legend text, not by a short chart.
 UNIT_LABEL_Y = 8.0
 X_LABEL_Y = PLOT_TOP + PLOT_H + 13
 CAPTION_Y = X_LABEL_Y + 13
@@ -209,6 +212,78 @@ def comparison_svg(points: list[dict], actual_color: str, forecast_color: str, u
         forecast_line,
         actual_line,
         marker,
+        *hits,
+        "</svg>",
+    ]
+    return "".join(p for p in parts if p)
+
+
+def triple_comparison_svg(
+    points: list[dict], actual_color: str, combined_color: str, forecast_color: str, unit_label: str
+) -> str:
+    """Three lines on one chart: actual (solid), actual+addon (solid, a
+    second color -- e.g. wind + curtailed volume, see
+    live_market_metrics.actual_and_addon_vs_forecast()), and forecast
+    (dashed). combined lags actual by however long its addon takes to
+    publish, so the two solid lines will often end at different
+    settlement periods -- that's real, not a rendering gap, and each
+    line's own last point gets its own end-of-line marker so it reads
+    clearly rather than looking like one broken series.
+    """
+    if not points:
+        return ""
+    values = [p[key] for p in points for key in ("actual", "combined", "forecast") if p[key] is not None]
+    if not values:
+        return ""
+    sps = [p["sp"] for p in points]
+    axes, axis_parts = _axes(values, sps, unit_label)
+    x, y = axes["x"], axes["y"]
+
+    def line(key: str, color: str, dashed: bool) -> str:
+        coords = [(x(p["sp"]), y(p[key])) for p in points if p[key] is not None]
+        if len(coords) < 2:
+            return ""
+        poly = " ".join(f"{cx:.1f},{cy:.1f}" for cx, cy in coords)
+        dash = ' stroke-dasharray="4,3"' if dashed else ""
+        return f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1"{dash}/>'
+
+    forecast_line = line("forecast", forecast_color, dashed=True)
+    actual_line = line("actual", actual_color, dashed=False)
+    combined_line = line("combined", combined_color, dashed=False)
+
+    markers = []
+    for key, color in (("actual", actual_color), ("combined", combined_color)):
+        last = next((p for p in reversed(points) if p[key] is not None), None)
+        if last is not None:
+            mx, my = x(last["sp"]), y(last[key])
+            markers.append(f'<circle cx="{mx:.1f}" cy="{my:.1f}" r="2.5" fill="{color}"/>')
+
+    def hit_title(p: dict) -> str:
+        bits = []
+        if p["actual"] is not None:
+            bits.append(f"Actual {_fmt(p['actual'])} {unit_label}")
+        if p["combined"] is not None:
+            bits.append(f"Actual+curtailed {_fmt(p['combined'])} {unit_label}")
+        if p["forecast"] is not None:
+            bits.append(f"Forecast {_fmt(p['forecast'])} {unit_label}")
+        return f"SP{p['sp']}: " + ", ".join(bits)
+
+    hits = []
+    for p in points:
+        ref_key = "combined" if p["combined"] is not None else ("actual" if p["actual"] is not None else None)
+        if ref_key is None:
+            continue
+        cx, cy = x(p["sp"]), y(p[ref_key])
+        hits.append(f'<circle class="chart-hit" cx="{cx:.1f}" cy="{cy:.1f}" r="{HIT_RADIUS}"><title>{hit_title(p)}</title></circle>')
+
+    parts = [
+        f'<svg viewBox="0 0 {VIEW_W:.0f} {VIEW_H:.0f}" role="img" '
+        f'aria-label="Actual, actual plus curtailed, and forecast, {unit_label}" preserveAspectRatio="xMidYMid meet">',
+        *axis_parts,
+        forecast_line,
+        actual_line,
+        combined_line,
+        *markers,
         *hits,
         "</svg>",
     ]

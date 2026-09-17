@@ -7,8 +7,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from gbpw.settlement import (  # noqa: E402
+    bid_data_published,
     local_to_settlement,
     periods_in_date,
+    sp_end_utc,
     sp_start_utc,
     utc_to_settlement,
     week_dates,
@@ -105,3 +107,33 @@ def test_local_to_settlement_half_hour_offset():
 
 def test_local_to_settlement_last_period_of_day():
     assert local_to_settlement(datetime(2026, 9, 5, 23, 30)) == (date(2026, 9, 5), 48)
+
+
+def test_sp_end_utc_is_next_periods_start():
+    d = date(2026, 9, 5)
+    assert sp_end_utc(d, 5) == sp_start_utc(d, 6)
+
+
+def test_bid_data_published_false_right_at_delivery_end():
+    d = date(2026, 9, 5)
+    now = sp_end_utc(d, 10)  # exactly at delivery end -- the 18 minutes haven't started yet
+    assert bid_data_published(d, 10, now=now) is False
+
+
+def test_bid_data_published_false_before_18_minutes_elapse():
+    d = date(2026, 9, 5)
+    now = sp_end_utc(d, 10) + timedelta(minutes=17)
+    assert bid_data_published(d, 10, now=now) is False
+
+
+def test_bid_data_published_true_once_18_minutes_elapse():
+    d = date(2026, 9, 5)
+    now = sp_end_utc(d, 10) + timedelta(minutes=18)
+    assert bid_data_published(d, 10, now=now) is True
+
+
+def test_bid_data_published_defaults_to_real_now(monkeypatch):
+    # A period from decades ago must read as published without needing
+    # an explicit `now` -- confirms the default actually calls the clock.
+    assert bid_data_published(date(2020, 1, 1), 1) is True
+    assert bid_data_published(date.today() + timedelta(days=3650), 1) is False
