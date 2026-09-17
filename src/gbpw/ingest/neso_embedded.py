@@ -1,8 +1,11 @@
 """
 NESO's "GB Embedded Wind and Solar Forecast" CKAN CSV -- the source used
-for solar forecasting in the user's own Fundies.ipynb notebook. Own module:
-different host (api.neso.energy) and shape (one whole-CSV download, no
-query params at all) from elexon.py/pvlive.py.
+for solar forecasting in the user's own Fundies.ipynb notebook, and (since
+the CSV already carries an EMBEDDED_WIND_FORECAST column too) also the
+Generation tab's "LV Wind" figure for GB Power Flow -- see
+power_flow_metrics.py. Own module: different host (api.neso.energy) and
+shape (one whole-CSV download, no query params at all) from
+elexon.py/pvlive.py.
 
 Unlike WINDFOR/NDF, this is not a historical-range API -- one fetch always
 returns a rolling snapshot from *now* through ~14 days ahead (confirmed
@@ -62,13 +65,16 @@ def _get() -> str:
     raise last_error  # type: ignore[misc]
 
 
-def fetch_solar_forecast() -> tuple[list[PriceRow], str]:
-    """Every (settlementDate, settlementPeriod, EMBEDDED_SOLAR_FORECAST)
-    row currently in the rolling window -- today through ~14 days ahead,
-    all in one HTTP call. Callers filter to whatever date(s) they need;
-    storing the full window costs nothing extra since it's already in
-    hand, and lets a future "tomorrow's expected solar" feature reuse this
-    same fetch with zero new calls.
+def fetch_embedded_forecasts() -> tuple[list[PriceRow], str]:
+    """Every (settlementDate, settlementPeriod) row currently in the
+    rolling window -- today through ~14 days ahead, all in one HTTP call
+    -- parsed into two series: EMBEDDED_SOLAR_FORECAST (as
+    "solar_forecast") and EMBEDDED_WIND_FORECAST (as
+    "wind_embedded_forecast"). The dataset's own name is "GB Embedded
+    Wind and Solar Forecast" -- confirmed live it already carries both
+    columns, so getting the second series costs nothing beyond parsing
+    it. Callers filter to whatever date(s) they need; storing the full
+    window costs nothing extra since it's already in hand.
     """
     text = _get()
     reader = csv.DictReader(io.StringIO(text))
@@ -77,10 +83,9 @@ def fetch_solar_forecast() -> tuple[list[PriceRow], str]:
     out: list[PriceRow] = []
     for row in reader:
         sd = date.fromisoformat(row["SETTLEMENT_DATE"][:10])
-        out.append(PriceRow(
-            series="solar_forecast", sd=sd, sp=int(row["SETTLEMENT_PERIOD"]),
-            run=run, value=float(row["EMBEDDED_SOLAR_FORECAST"]),
-        ))
+        sp = int(row["SETTLEMENT_PERIOD"])
+        out.append(PriceRow(series="solar_forecast", sd=sd, sp=sp, run=run, value=float(row["EMBEDDED_SOLAR_FORECAST"])))
+        out.append(PriceRow(series="wind_embedded_forecast", sd=sd, sp=sp, run=run, value=float(row["EMBEDDED_WIND_FORECAST"])))
     if out:
         dates = sorted({r.sd for r in out})
         note = f"ok ({len(out)} rows, {dates[0]}..{dates[-1]})"

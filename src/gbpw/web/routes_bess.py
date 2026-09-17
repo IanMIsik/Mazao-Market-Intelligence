@@ -29,14 +29,28 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.filters["commas"] = lambda v, decimals=0: f"{v:,.{decimals}f}"
 
 
+def _latest_settled_date(db: sqlite3.Connection) -> date | None:
+    """MAX(sd) in eac_results, capped at today (None if no rows at all --
+    preserved as-is so the page's own "No EAC data ingested yet" check
+    still works). eac_results can now genuinely hold a day-ahead row for
+    tomorrow (background_refresh.py's EAC ingest window runs one day past
+    `today` on purpose -- see its own comment), so the raw MAX(sd) is no
+    longer always "the latest settled day"; the window picker and the
+    "Data to ..." stamp both mean the latter, not "including tomorrow's
+    still-clearing auction".
+    """
+    latest = eac_metrics.latest_available_date(db)
+    return min(latest, date.today()) if latest else None
+
+
 def _window_dates(db: sqlite3.Connection, window: int) -> tuple[date, date]:
-    end = eac_metrics.latest_available_date(db) or date.today()
+    end = _latest_settled_date(db) or date.today()
     start = end - timedelta(days=window - 1)
     return start, end
 
 
 @router.get("/bess", response_class=HTMLResponse)
-def bess_page(request: Request, window: int = 7, db: sqlite3.Connection = Depends(get_db)):
+def bess_page(request: Request, window: int = 7, auction_day: str = "today", db: sqlite3.Connection = Depends(get_db)):
     start, end = _window_dates(db, window)
 
     summary = eac_metrics.market_summary(db, start, end)
@@ -48,8 +62,19 @@ def bess_page(request: Request, window: int = 7, db: sqlite3.Connection = Depend
     # "today's auctions" is EAC-only and meant to be glanced at repeatedly
     # through the day, so it must not move when someone picks a different
     # window to analyze trends with.
+    #
+    # EAC auctions clear day-ahead -- by the time "today" is well underway,
+    # tomorrow's auction has typically already cleared and is sitting in
+    # eac_results too, so a user glancing at this card mid-day can easily
+    # land on tomorrow's figures without realising the card moved. Rather
+    # than silently pick one, `auction_day` lets the user flip between the
+    # two explicitly -- both cards are labelled with the actual calendar
+    # date they show (see bess_analytics.html), not just "Today"/"Tomorrow".
     today = date.today()
-    today_revenue = eac_metrics.daily_revenue_by_participant(db, today)
+    tomorrow = today + timedelta(days=1)
+    auction_day = auction_day if auction_day in ("today", "tomorrow") else "today"
+    selected_day = tomorrow if auction_day == "tomorrow" else today
+    today_revenue = eac_metrics.daily_revenue_by_participant(db, selected_day)
 
     # A donut can't represent a negative share of a whole -- clearing_price
     # can be genuinely negative (a unit paying to provide response), so
@@ -71,11 +96,14 @@ def bess_page(request: Request, window: int = 7, db: sqlite3.Connection = Depend
         "window": window,
         "start": start,
         "end": end,
-        "latest_available": eac_metrics.latest_available_date(db),
+        "latest_available": _latest_settled_date(db),
         "summary": summary,
         "dist": dist,
         "activity": activity,
         "today": today,
+        "tomorrow": tomorrow,
+        "auction_day": auction_day,
+        "selected_day": selected_day,
         "today_revenue": today_revenue,
         "today_revenue_svg": charts_bess.daily_revenue_donut_svg(positive_participants),
         "today_revenue_legend": today_revenue_legend,

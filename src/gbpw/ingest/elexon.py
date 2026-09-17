@@ -122,6 +122,14 @@ def fetch_day_ahead(d: date) -> tuple[list[PriceRow], str]:
 
 
 def fetch_imbalance(d: date) -> tuple[list[PriceRow], str]:
+    """Also captures netImbalanceVolume (NIV) from this same response as
+    series='imbalance_volume' -- zero extra calls, the field is already
+    in the payload we fetch for price. NIV is Elexon/BSC's standard net
+    imbalance volume for the settlement period, in MWh (well-established
+    public terminology; unlike the EAC/NESO CKAN datasets used elsewhere
+    in this project, this API exposes no per-field unit metadata to
+    confirm it against directly).
+    """
     rows = _get(f"{BASE}/balancing/settlement/system-prices/{d.isoformat()}", {})
     out: list[PriceRow] = []
     mismatches = 0
@@ -131,6 +139,8 @@ def fetch_imbalance(d: date) -> tuple[list[PriceRow], str]:
         if r["systemSellPrice"] != r["systemBuyPrice"]:
             mismatches += 1
         out.append(PriceRow(series="imbalance", sd=d, sp=r["settlementPeriod"], run="latest", value=r["systemSellPrice"]))
+        if r.get("netImbalanceVolume") is not None:
+            out.append(PriceRow(series="imbalance_volume", sd=d, sp=r["settlementPeriod"], run="latest", value=r["netImbalanceVolume"]))
     note = f"ok ({len(out)} periods)" if mismatches == 0 else f"ok, {mismatches} period(s) had SBP != SSP (used SSP)"
     return out, note
 

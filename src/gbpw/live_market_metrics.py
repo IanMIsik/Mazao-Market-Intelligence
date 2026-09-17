@@ -224,3 +224,22 @@ def actual_and_addon_vs_forecast(
     points.sort(key=lambda p: p["sp"])
 
     return {"points": points}
+
+
+def dual_series_today(conn: sqlite3.Connection, series_a: str, series_b: str, today: date) -> dict:
+    """Today's two progressions, paired by settlement period, for a chart
+    with two independent y-axes (charts_live.dual_series_svg()) -- for two
+    series with genuinely different units where one shared scale would be
+    meaningless (e.g. imbalance price £/MWh vs imbalance volume MWh; a
+    "150" on one is not comparable to a "150" on the other). Unlike
+    actual_vs_forecast(), neither series is secondary here -- both are
+    independently live actuals -- so a point exists for any settlement
+    period either series has, with the other side None if that series
+    hasn't cleared for it.
+    """
+    a = today_progression(conn, series_a, today)
+    b = today_progression(conn, series_b, today)
+    a_by_sp = {p["sp"]: p["value"] for p in a["points"]}
+    b_by_sp = {p["sp"]: p["value"] for p in b["points"]}
+    all_sps = sorted(set(a_by_sp) | set(b_by_sp))
+    return {"points": [{"sp": sp, "a": a_by_sp.get(sp), "b": b_by_sp.get(sp)} for sp in all_sps]}

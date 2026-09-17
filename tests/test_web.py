@@ -1,6 +1,6 @@
 import json
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -116,6 +116,44 @@ def test_bess_page_today_card_shows_real_data_and_is_independent_of_window(tmp_p
         assert 'id="kpi-avg-price">' in r.text and "£5.00/MW/h" in r.text
         assert 'id="kpi-participants">1<' in r.text
         assert "Alpha Energy" in r.text  # rendered in the donut legend
+
+
+def test_bess_page_auction_day_toggle_switches_between_today_and_tomorrow(tmp_path):
+    # EAC auctions clear day-ahead, so "today" and "tomorrow" can both have
+    # real, different data at once -- the toggle must show the right one
+    # and label it with its own actual date, not always say "Today".
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    conn = connect(tmp_path / "test.db")
+    upsert_eac_results(conn, [
+        _eac_row(neso_id=1, auction_unit="AUNIT01", participant="Alpha Energy", sd=today,
+                  delivery_start=f"{today.isoformat()}T00:00:00", delivery_end=f"{today.isoformat()}T00:30:00"),
+        _eac_row(neso_id=2, auction_unit="AUNIT02", participant="Beta Storage", sd=tomorrow,
+                  delivery_start=f"{tomorrow.isoformat()}T00:00:00", delivery_end=f"{tomorrow.isoformat()}T00:30:00"),
+    ])
+    client = _client(tmp_path / "test.db")
+
+    r = client.get("/bess")
+    assert r.status_code == 200
+    assert "Today's EAC revenue" in r.text
+    assert "Alpha Energy" in r.text
+    assert "Beta Storage" not in r.text
+
+    r = client.get("/bess?auction_day=tomorrow")
+    assert r.status_code == 200
+    assert "Tomorrow's EAC revenue" in r.text
+    assert "Beta Storage" in r.text
+    assert "Alpha Energy" not in r.text
+    assert f'&mdash; {tomorrow.strftime("%a %d %b %Y")}' in r.text
+
+
+def test_bess_page_auction_day_invalid_value_falls_back_to_today(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/bess?auction_day=nonsense")
+    assert r.status_code == 200
+    assert "Today's EAC revenue" in r.text
 
 
 def test_gbpw_weekly_page_renders_from_stored_report(tmp_path):
@@ -271,13 +309,13 @@ def test_live_market_page_shows_todays_latest_value(tmp_path):
     today = date.today()
     conn = connect(tmp_path / "test.db")
     upsert_prices(conn, [
-        PriceRow("wind", today, 1, "NA", 4000.0),
-        PriceRow("wind", today, 2, "NA", 5000.0),
+        PriceRow("demand", today, 1, "NA", 24000.0),
+        PriceRow("demand", today, 2, "NA", 25000.0),
     ])
     client = _client(tmp_path / "test.db")
     r = client.get("/live")
     assert r.status_code == 200
-    assert "5.00" in r.text  # latest (SP2), GW-converted, not the SP1 value
+    assert "25.00" in r.text  # latest (SP2), GW-converted, not the SP1 value
     assert "SP2" in r.text
 
 

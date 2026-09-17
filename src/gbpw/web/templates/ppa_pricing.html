@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}PPA Pricing Engine | Mazao Consulting{% endblock %}
+
+{% block content %}
+
+<header>
+  <div class="brand2">PPA Pricing Engine</div>
+  <div class="stamp num">Solar &middot; Fixed-price PPA &middot; MVP</div>
+</header>
+
+<h1>What PPA price does this project need to hit its target return?</h1>
+<p class="byline">Solves backward from a target IRR to the required flat £/MWh PPA price, given the
+project's own assumptions below. Solar and a fixed-price PPA structure only, for now &mdash;
+<a href="/ppa">historical wind/solar capture-price analysis</a> is a separate page.</p>
+
+{% if error %}
+<div class="form-error">{{ error }}</div>
+{% endif %}
+
+<form class="buildform" method="get" action="/ppa/pricing">
+  <div class="fieldset-label">Project</div>
+  <div class="row">
+    <div><label for="capacity_mw">Capacity (MW)</label>
+      <input type="number" id="capacity_mw" name="capacity_mw" step="0.1" min="0.01" required value="{{ inputs.capacity_mw }}"></div>
+    <div><label for="capacity_factor_pct">Capacity factor (%)</label>
+      <input type="number" id="capacity_factor_pct" name="capacity_factor_pct" step="0.1" min="0" max="100" required value="{{ inputs.capacity_factor_pct }}"></div>
+    <div><label for="availability_pct">Availability (%)</label>
+      <input type="number" id="availability_pct" name="availability_pct" step="0.1" min="0" max="100" required value="{{ inputs.availability_pct }}"></div>
+    <div><label for="curtailment_pct">Curtailment (%)</label>
+      <input type="number" id="curtailment_pct" name="curtailment_pct" step="0.1" min="0" max="100" required value="{{ inputs.curtailment_pct }}"></div>
+    <div><label for="degradation_pct">Degradation (%/yr)</label>
+      <input type="number" id="degradation_pct" name="degradation_pct" step="0.01" min="0" max="100" required value="{{ inputs.degradation_pct }}"></div>
+    <div><label for="ppa_term_years">PPA term (years)</label>
+      <input type="number" id="ppa_term_years" name="ppa_term_years" step="1" min="1" max="40" required value="{{ inputs.ppa_term_years }}"></div>
+  </div>
+
+  <div class="fieldset-label">Financial assumptions</div>
+  <div class="row">
+    <div><label for="capex_per_mw">CAPEX (£/MW)</label>
+      <input type="number" id="capex_per_mw" name="capex_per_mw" step="1000" min="0" required value="{{ inputs.capex_per_mw }}"></div>
+    <div><label for="opex_per_mw_year">OPEX (£/MW/yr)</label>
+      <input type="number" id="opex_per_mw_year" name="opex_per_mw_year" step="100" min="0" required value="{{ inputs.opex_per_mw_year }}"></div>
+    <div><label for="inflation_pct">OPEX inflation (%/yr)</label>
+      <input type="number" id="inflation_pct" name="inflation_pct" step="0.1" min="0" max="50" required value="{{ inputs.inflation_pct }}"></div>
+    <div><label for="gearing_pct">Debt / gearing (%)</label>
+      <input type="number" id="gearing_pct" name="gearing_pct" step="1" min="0" max="95" required value="{{ inputs.gearing_pct }}"></div>
+    <div><label for="interest_rate_pct">Interest rate (%/yr)</label>
+      <input type="number" id="interest_rate_pct" name="interest_rate_pct" step="0.1" min="0" max="30" required value="{{ inputs.interest_rate_pct }}"></div>
+    <div><label for="debt_term_years">Debt term (years)</label>
+      <input type="number" id="debt_term_years" name="debt_term_years" step="1" min="0" max="40" required value="{{ inputs.debt_term_years }}"></div>
+  </div>
+
+  <div class="fieldset-label">Target return</div>
+  <div class="row">
+    <div><label for="target">Solve for</label>
+      <select id="target" name="target">
+        <option value="project" {{ 'selected' if inputs.target == 'project' else '' }}>Project IRR (unlevered)</option>
+        <option value="equity" {{ 'selected' if inputs.target == 'equity' else '' }}>Equity IRR (levered)</option>
+      </select></div>
+    <div><label for="target_irr_pct">Target IRR (%)</label>
+      <input type="number" id="target_irr_pct" name="target_irr_pct" step="0.1" min="-50" max="100" required value="{{ inputs.target_irr_pct }}"></div>
+    <div><label for="discount_rate_pct">NPV discount rate (%)</label>
+      <input type="number" id="discount_rate_pct" name="discount_rate_pct" step="0.1" min="0" max="50" required value="{{ inputs.discount_rate_pct }}"></div>
+    <button class="btn" type="submit">Solve for PPA price</button>
+  </div>
+  <p class="hint">All figures above are your own editable assumptions -- nothing here is hidden inside
+  the calculation. There's no "wholesale price" field: a fixed-price PPA's revenue is generation &times;
+  this flat £/MWh only, so a market-price input the model would then ignore would just be misleading
+  (see the methodology note below for the real market comparison instead).</p>
+</form>
+
+{% if result %}
+<div class="today-card" style="margin-top:20px;">
+  <div class="today-card-head">
+    <h2>Required PPA Price</h2>
+  </div>
+  <div class="kpis">
+    <div class="kpi">
+      <div class="k">Required PPA price</div>
+      <div class="v num">£{{ result.ppa_price_gbp_mwh|commas(2) }}/MWh</div>
+      <div class="ref num">achieves {{ (result.achieved_irr * 100)|commas(2) }}% {{ result.target }} IRR</div>
+    </div>
+    <div class="kpi">
+      <div class="k">Annual generation (year 1)</div>
+      <div class="v2 num">{{ result.generation_mwh_year1|commas(0) }} MWh</div>
+      <div class="ref num">{{ result.total_generation_mwh|commas(0) }} MWh over the full term</div>
+    </div>
+    <div class="kpi">
+      <div class="k">CAPEX</div>
+      <div class="v num">£{{ (result.capex_gbp / 1000000)|commas(2) }}m</div>
+      <div class="ref num">£{{ result.opex_year1_gbp|commas(0) }}/yr OPEX (year 1)</div>
+    </div>
+  </div>
+
+  <div class="chart-grid" style="margin-top:14px;">
+    <div>
+      <div class="cg-label">Year 1 breakdown (£)</div>
+      <div class="kpis" style="grid-template-columns:1fr;">
+        <div class="kpi"><div class="k">PPA revenue</div><div class="ref num">£{{ result.revenue_year1_gbp|commas(0) }}</div></div>
+        <div class="kpi"><div class="k">OPEX</div><div class="ref num">&minus;£{{ result.opex_year1_gbp|commas(0) }}</div></div>
+        <div class="kpi"><div class="k">EBITDA</div><div class="ref num">£{{ result.ebitda_year1_gbp|commas(0) }}</div></div>
+        {% if result.target == 'equity' and result.debt_service_year1_gbp %}
+        <div class="kpi"><div class="k">Debt service</div><div class="ref num">&minus;£{{ result.debt_service_year1_gbp|commas(0) }}</div></div>
+        <div class="kpi"><div class="k">Equity cashflow</div><div class="ref num">£{{ (result.ebitda_year1_gbp - result.debt_service_year1_gbp)|commas(0) }}</div></div>
+        {% endif %}
+      </div>
+    </div>
+    <div>
+      <div class="cg-label">For context: real historical market data</div>
+      {% if market_context.capture_price_gbp_mwh is not none %}
+      <p class="section-note">Solar's own historical capture price over the last 12 months has averaged
+      <strong>£{{ market_context.capture_price_gbp_mwh|commas(2) }}/MWh</strong>
+      ({{ market_context.capture_rate_pct|commas(1) }}% capture rate against LCCC's IMRP baseload of
+      £{{ market_context.baseload_price_gbp_mwh|commas(2) }}/MWh). Your required PPA price of
+      £{{ result.ppa_price_gbp_mwh|commas(2) }}/MWh is
+      {% if result.ppa_price_gbp_mwh > market_context.capture_price_gbp_mwh %}
+      a £{{ (result.ppa_price_gbp_mwh - market_context.capture_price_gbp_mwh)|commas(2) }}/MWh premium over
+      {% else %}
+      a £{{ (market_context.capture_price_gbp_mwh - result.ppa_price_gbp_mwh)|commas(2) }}/MWh discount to
+      {% endif %}
+      that -- this isn't part of the calculation, just a reality check against the market.</p>
+      {% else %}
+      <p class="section-note">No historical solar capture-price data available yet for comparison
+      (see <a href="/ppa">/ppa</a>).</p>
+      {% endif %}
+      {% if result.npv_at_discount_rate_gbp is not none %}
+      <p class="section-note">NPV at a separate {{ inputs.discount_rate_pct }}% discount rate:
+      £{{ (result.npv_at_discount_rate_gbp / 1000000)|commas(2) }}m
+      (positive because {{ inputs.discount_rate_pct }}% is below your {{ inputs.target_irr_pct }}% target).</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <details style="margin-top:10px;">
+    <summary>Methodology &amp; assumptions</summary>
+    <p class="section-note">Generation uses a flat capacity-factor model
+    (capacity &times; capacity factor &times; 8,760 hours &times; availability &times; (1&minus;curtailment),
+    declining by the degradation rate each year) -- not a half-hourly shape, since a project that doesn't
+    exist yet has no real dispatch history to model one from. Revenue is Fixed-PPA only: generation
+    &times; a single flat £/MWh for the whole term, no CPI/market-linked escalation. Debt is a simple
+    equal-installment amortizing loan on the declining balance -- a simplification versus real
+    DSCR-sculpted project debt. The solver uses bisection (see ppa_pricing/solver.py) since IRR is
+    strictly increasing in PPA price for a fixed structure, which guarantees a single, robust root.
+    CPI-linked/market-linked/floor-collar PPA structures, other technologies, sensitivity analysis, tax,
+    and saved scenarios are not yet implemented.</p>
+  </details>
+</div>
+{% endif %}
+
+{% endblock %}

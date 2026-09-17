@@ -36,6 +36,9 @@ VIEW_W = AXIS_LEFT + PLOT_W + 8
 VIEW_H = CAPTION_Y + 6
 HIT_RADIUS = 4.5
 
+AXIS_RIGHT = 42.0  # mirrors AXIS_LEFT, for dual_series_svg()'s second axis
+DUAL_VIEW_W = AXIS_LEFT + PLOT_W + AXIS_RIGHT
+
 
 def _nice_step(span: float, target_ticks: int) -> float:
     if span <= 0:
@@ -112,6 +115,57 @@ def _axes(values: list[float], sps: list[int], unit_label: str) -> tuple[dict, l
     parts.append(f'<text class="ax sm" x="{AXIS_LEFT + PLOT_W / 2:.1f}" y="{CAPTION_Y:.1f}" text-anchor="middle">Settlement period</text>')
 
     return {"x": x, "y": y}, parts
+
+
+def _dual_axes(
+    left_values: list[float], right_values: list[float], sps: list[int], left_unit: str, right_unit: str
+) -> tuple[dict, list[str]]:
+    """Two independent y-scales sharing one x-axis -- left for one series,
+    right (mirrored, ticks on the outside edge) for the other. Used when
+    two series don't share a unit and a single shared scale would flatten
+    one of them (see dual_series_svg()); render/charts.py's hero chart and
+    this module's own _axes() both only ever handle one shared scale.
+    """
+    left_min, left_max = min(left_values), max(left_values)
+    right_min, right_max = min(right_values), max(right_values)
+    left_ticks = _y_ticks(left_min, left_max)
+    right_ticks = _y_ticks(right_min, right_max)
+    left_axis_min, left_axis_max = left_ticks[0], left_ticks[-1]
+    right_axis_min, right_axis_max = right_ticks[0], right_ticks[-1]
+    left_span = (left_axis_max - left_axis_min) or 1.0
+    right_span = (right_axis_max - right_axis_min) or 1.0
+
+    min_sp, max_sp = min(sps), max(sps)
+    sp_span = (max_sp - min_sp) or 1
+    plot_right = AXIS_LEFT + PLOT_W
+
+    def x(sp: int) -> float:
+        return AXIS_LEFT + ((sp - min_sp) / sp_span) * PLOT_W
+
+    def y_left(v: float) -> float:
+        return PLOT_TOP + PLOT_H - ((v - left_axis_min) / left_span) * PLOT_H
+
+    def y_right(v: float) -> float:
+        return PLOT_TOP + PLOT_H - ((v - right_axis_min) / right_span) * PLOT_H
+
+    parts = [f'<text class="ax sm unit" x="{AXIS_LEFT - 5:.1f}" y="{UNIT_LABEL_Y:.1f}" text-anchor="end">{left_unit}</text>']
+    for t in left_ticks:
+        gy = y_left(t)
+        line_class = "axline" if t == 0 and left_axis_min < 0 < left_axis_max else "grid"
+        parts.append(f'<line class="{line_class}" x1="{AXIS_LEFT}" x2="{plot_right}" y1="{gy:.1f}" y2="{gy:.1f}"/>')
+        parts.append(f'<text class="ax sm" x="{AXIS_LEFT - 5:.1f}" y="{gy + 3.5:.1f}" text-anchor="end">{_fmt(t)}</text>')
+
+    parts.append(f'<text class="ax sm unit" x="{plot_right + 5:.1f}" y="{UNIT_LABEL_Y:.1f}" text-anchor="start">{right_unit}</text>')
+    for t in right_ticks:
+        parts.append(f'<text class="ax sm" x="{plot_right + 5:.1f}" y="{y_right(t) + 3.5:.1f}" text-anchor="start">{_fmt(t)}</text>')
+
+    for sp in _sp_ticks(min_sp, max_sp):
+        sx = x(sp)
+        parts.append(f'<line class="grid" x1="{sx:.1f}" x2="{sx:.1f}" y1="{PLOT_TOP}" y2="{PLOT_TOP + PLOT_H}"/>')
+        parts.append(f'<text class="ax sm" x="{sx:.1f}" y="{X_LABEL_Y:.1f}" text-anchor="middle">{sp}</text>')
+    parts.append(f'<text class="ax sm" x="{AXIS_LEFT + PLOT_W / 2:.1f}" y="{CAPTION_Y:.1f}" text-anchor="middle">Settlement period</text>')
+
+    return {"x": x, "y_left": y_left, "y_right": y_right}, parts
 
 
 def progression_svg(points: list[dict], color: str, unit_label: str) -> str:
@@ -283,6 +337,75 @@ def triple_comparison_svg(
         forecast_line,
         actual_line,
         combined_line,
+        *markers,
+        *hits,
+        "</svg>",
+    ]
+    return "".join(p for p in parts if p)
+
+
+def dual_series_svg(
+    points: list[dict], a_color: str, b_color: str, a_unit: str, b_unit: str
+) -> str:
+    """Two lines, independent left/right y-scales, sharing one x-axis --
+    for two series that don't share a unit (e.g. imbalance price £/MWh on
+    the left, net imbalance volume MWh on the right) where forcing them
+    onto one shared scale would flatten whichever has the smaller range
+    into a meaningless near-flat line. Shape matches
+    live_market_metrics.dual_series_today(): each point has {sp, a, b},
+    either of which may be None for a period one series hasn't cleared
+    for yet -- neither side is treated as secondary the way forecast is
+    in comparison_svg(), both are independently live actuals.
+    """
+    if not points:
+        return ""
+    a_values = [p["a"] for p in points if p["a"] is not None]
+    b_values = [p["b"] for p in points if p["b"] is not None]
+    if not a_values or not b_values:
+        return ""
+    sps = [p["sp"] for p in points]
+    axes, axis_parts = _dual_axes(a_values, b_values, sps, a_unit, b_unit)
+    x = axes["x"]
+
+    def line(key: str, y_fn, color: str) -> str:
+        coords = [(x(p["sp"]), y_fn(p[key])) for p in points if p[key] is not None]
+        if len(coords) < 2:
+            return ""
+        poly = " ".join(f"{cx:.1f},{cy:.1f}" for cx, cy in coords)
+        return f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1"/>'
+
+    a_line = line("a", axes["y_left"], a_color)
+    b_line = line("b", axes["y_right"], b_color)
+
+    markers = []
+    for key, y_fn, color in (("a", axes["y_left"], a_color), ("b", axes["y_right"], b_color)):
+        last = next((p for p in reversed(points) if p[key] is not None), None)
+        if last is not None:
+            mx, my = x(last["sp"]), y_fn(last[key])
+            markers.append(f'<circle cx="{mx:.1f}" cy="{my:.1f}" r="2.5" fill="{color}"/>')
+
+    def hit_title(p: dict) -> str:
+        bits = []
+        if p["a"] is not None:
+            bits.append(f"{_fmt(p['a'])} {a_unit}")
+        if p["b"] is not None:
+            bits.append(f"{_fmt(p['b'])} {b_unit}")
+        return f"SP{p['sp']}: " + ", ".join(bits)
+
+    hits = []
+    for p in points:
+        if p["a"] is None and p["b"] is None:
+            continue
+        ref_key, y_fn = ("a", axes["y_left"]) if p["a"] is not None else ("b", axes["y_right"])
+        cx, cy = x(p["sp"]), y_fn(p[ref_key])
+        hits.append(f'<circle class="chart-hit" cx="{cx:.1f}" cy="{cy:.1f}" r="{HIT_RADIUS}"><title>{hit_title(p)}</title></circle>')
+
+    parts = [
+        f'<svg viewBox="0 0 {DUAL_VIEW_W:.0f} {VIEW_H:.0f}" role="img" '
+        f'aria-label="Two series, {a_unit} and {b_unit}, on independent scales" preserveAspectRatio="xMidYMid meet">',
+        *axis_parts,
+        a_line,
+        b_line,
         *markers,
         *hits,
         "</svg>",

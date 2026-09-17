@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/static/app.css">
 {% block extra_head %}{% endblock %}
 </head>
-<body class="{{ 'live' if active_nav == 'live' else '' }}">
+<body class="{{ 'live' if active_nav == 'live' else '' }}" data-last-updated="{{ last_updated|default('') }}">
 
 <div class="appnav">
   <div class="wrap">
@@ -16,7 +16,7 @@
       <a href="/gbpw" class="{{ 'on' if active_nav == 'gbpw' else '' }}">GB Power Weekly</a>
       <a href="/bess" class="{{ 'on' if active_nav == 'bess' else '' }}">BESS Analytics</a>
       <a href="/live" class="{{ 'on' if active_nav == 'live' else '' }}">Live market</a>
-      <a class="soon">PPA tools<span>soon</span></a>
+      <a href="/ppa" class="{{ 'on' if active_nav == 'ppa' else '' }}">PPA tools</a>
     </nav>
   </div>
 </div>

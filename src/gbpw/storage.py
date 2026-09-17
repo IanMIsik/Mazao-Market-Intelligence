@@ -23,6 +23,19 @@ Schema:
         this index that join takes ~2.5s even for a 7-day window; with it,
         ~100ms. A plain sd index alone doesn't help because the query
         planner doesn't choose to use it in this join shape.
+    fuelinst_generation(start_time, fuel_type, generation_mw, fetched_at)
+        PK (start_time, fuel_type) -- Elexon FUELINST, generation by fuel
+        type every 5 minutes, for the Live Market Generation tab. Keyed on
+        the real UTC instant, not (sd, sp) -- see fuelinst_metrics.py.
+    carbon_intensity(sd, sp, forecast, actual, index_label, fetched_at)
+        PK (sd, sp) -- NESO Carbon Intensity API's headline gCO2/kWh
+        figure + qualitative band, for the Live Market Generation tab.
+        See carbon_intensity_metrics.py.
+    carbon_intensity_factors(key, factor, fetched_at)
+        PK (key) -- the official gCO2/kWh factor per fuel type/import
+        country from /intensity/factors, not date-scoped (only ever one
+        current value). Applied to FUELINST's own generation mix to
+        compute the Carbon Intensity donut's emissions-weighted %.
 
 Series stored in `prices`:
     day_ahead        -- Elexon Market Index Data, GBP/MWh          (run='NA')
@@ -147,6 +160,50 @@ CREATE TABLE IF NOT EXISTS bm_cashflows (
 );
 CREATE INDEX IF NOT EXISTS idx_bm_cashflows_bmu ON bm_cashflows(national_grid_bm_unit);
 CREATE INDEX IF NOT EXISTS idx_bm_cashflows_bmu_sd ON bm_cashflows(national_grid_bm_unit, sd);
+
+-- Elexon FUELINST: generation by fuel type, published every 5 minutes --
+-- 6x finer than FUELHH's half-hourly `prices` rows, which is the whole
+-- point of using it for the Generation tab. Keyed on the real UTC
+-- instant (not sd/sp) since a settlement-period key would either throw
+-- away 5 of every 6 readings or need a fake sub-period numbering scheme
+-- sp was never designed to hold. See web/fuelinst_metrics.py.
+CREATE TABLE IF NOT EXISTS fuelinst_generation (
+    start_time    TEXT NOT NULL,
+    fuel_type     TEXT NOT NULL,
+    generation_mw REAL NOT NULL,
+    fetched_at    TEXT NOT NULL,
+    PRIMARY KEY (start_time, fuel_type)
+);
+CREATE INDEX IF NOT EXISTS idx_fuelinst_start_time ON fuelinst_generation(start_time);
+
+-- NESO Carbon Intensity API's headline figure -- kept separate from
+-- `prices` because it carries a text index label ('low'/'moderate'/...)
+-- that column can't hold, and storing NESO's own label verbatim avoids
+-- re-deriving the qualitative band from thresholds ourselves.
+CREATE TABLE IF NOT EXISTS carbon_intensity (
+    sd          TEXT NOT NULL,
+    sp          INTEGER NOT NULL,
+    forecast    REAL NOT NULL,
+    actual      REAL,
+    index_label TEXT NOT NULL,
+    fetched_at  TEXT NOT NULL,
+    PRIMARY KEY (sd, sp)
+);
+
+-- The official gCO2/kWh factor per fuel type/import country from
+-- /intensity/factors -- essentially static, but re-ingested every cycle
+-- like everything else rather than hardcoded, so it always matches
+-- whatever NESO currently publishes. `key` is this project's own
+-- normalized identifier (a FUELINST fuel type code, "SOLAR", or
+-- "IMPORT_<country>") -- see ingest/carbon_intensity.py's
+-- FACTOR_KEY_MAP. Not date-scoped: there's only ever one current value
+-- per key, and re-ingesting simply overwrites it.
+CREATE TABLE IF NOT EXISTS carbon_intensity_factors (
+    key        TEXT NOT NULL,
+    factor     REAL NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (key)
+);
 """
 
 
@@ -194,6 +251,28 @@ class BmCashflowRow:
     national_grid_bm_unit: str
     bid_offer: str  # 'bid' | 'offer'
     total_cashflow: float
+
+
+@dataclass(frozen=True)
+class FuelInstRow:
+    start_time: datetime  # UTC, timezone-aware
+    fuel_type: str
+    generation_mw: float
+
+
+@dataclass(frozen=True)
+class CarbonIntensityRow:
+    sd: date
+    sp: int
+    forecast: float
+    actual: float | None
+    index_label: str
+
+
+@dataclass(frozen=True)
+class CarbonIntensityFactorRow:
+    key: str
+    factor: float
 
 
 # Guards the WAL-mode switch + schema creation below, not regular
@@ -386,6 +465,72 @@ def upsert_bm_cashflows(
     )
     conn.commit()
     return len(data)
+
+
+def upsert_fuelinst(conn: sqlite3.Connection, rows: Iterable[FuelInstRow], fetched_at: datetime | None = None) -> int:
+    fetched_at = fetched_at or datetime.now(timezone.utc)
+    ts = fetched_at.isoformat()
+    data = [(r.start_time.isoformat(), r.fuel_type, r.generation_mw, ts) for r in rows]
+    conn.executemany(
+        """
+        INSERT INTO fuelinst_generation (start_time, fuel_type, generation_mw, fetched_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (start_time, fuel_type) DO UPDATE SET
+            generation_mw = excluded.generation_mw,
+            fetched_at = excluded.fetched_at
+        """,
+        data,
+    )
+    conn.commit()
+    return len(data)
+
+
+def upsert_carbon_intensity(conn: sqlite3.Connection, row: CarbonIntensityRow, fetched_at: datetime | None = None) -> None:
+    fetched_at = fetched_at or datetime.now(timezone.utc)
+    conn.execute(
+        """
+        INSERT INTO carbon_intensity (sd, sp, forecast, actual, index_label, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (sd, sp) DO UPDATE SET
+            forecast = excluded.forecast,
+            actual = excluded.actual,
+            index_label = excluded.index_label,
+            fetched_at = excluded.fetched_at
+        """,
+        (row.sd.isoformat(), row.sp, row.forecast, row.actual, row.index_label, fetched_at.isoformat()),
+    )
+    conn.commit()
+
+
+def upsert_carbon_intensity_factors(
+    conn: sqlite3.Connection, rows: Iterable[CarbonIntensityFactorRow], fetched_at: datetime | None = None
+) -> int:
+    fetched_at = fetched_at or datetime.now(timezone.utc)
+    ts = fetched_at.isoformat()
+    data = [(r.key, r.factor, ts) for r in rows]
+    conn.executemany(
+        """
+        INSERT INTO carbon_intensity_factors (key, factor, fetched_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT (key) DO UPDATE SET
+            factor = excluded.factor,
+            fetched_at = excluded.fetched_at
+        """,
+        data,
+    )
+    conn.commit()
+    return len(data)
+
+
+def latest_fetch_ts(conn: sqlite3.Connection) -> str | None:
+    """MAX(ts) across fetch_log -- background_refresh.py's own refresh
+    cycle logs every series it touches here, so this single timestamp is
+    a reliable "did a refresh cycle just complete" signal for the Live
+    Market page's polling endpoint (see web/routes_live.py's /live/status)
+    without having to enumerate every series that page depends on.
+    """
+    row = conn.execute("SELECT MAX(ts) FROM fetch_log").fetchone()
+    return row[0] if row else None
 
 
 def log_fetch(conn: sqlite3.Connection, series: str, sd: date, ok: bool, note: str = "") -> None:

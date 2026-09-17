@@ -31,9 +31,15 @@ and see their own EAC and Balancing Mechanism activity in detail.</p>
 
 <div class="today-card">
   <div class="today-card-head">
-    <h2>Today's EAC revenue &mdash; {{ today.strftime('%a %d %b %Y') }}</h2>
-    <span class="section-note">Independent of the window below &mdash; a live, partial picture,
-    not a final tally. Click a segment for its own figures, click elsewhere to reset.</span>
+    <h2>{{ 'Tomorrow' if auction_day == 'tomorrow' else "Today" }}'s EAC revenue &mdash; {{ selected_day.strftime('%a %d %b %Y') }}</h2>
+    <div class="day-toggle">
+      <a href="?window={{ window }}&auction_day=today" class="{{ 'on' if auction_day == 'today' else '' }}">Today &middot; {{ today.strftime('%d %b') }}</a>
+      <a href="?window={{ window }}&auction_day=tomorrow" class="{{ 'on' if auction_day == 'tomorrow' else '' }}">Tomorrow &middot; {{ tomorrow.strftime('%d %b') }}</a>
+    </div>
+    <span class="section-note">EAC auctions clear day-ahead, so tomorrow's results are often already in by
+    midday &mdash; use the toggle above if this card looks like it jumped a day. Independent of the window
+    below &mdash; a live, partial picture, not a final tally. Click a segment for its own figures, click
+    elsewhere to reset.</span>
   </div>
   {% if today_revenue.by_participant %}
   <div class="kpis" id="revenue-kpis">
@@ -74,7 +80,7 @@ and see their own EAC and Balancing Mechanism activity in detail.</p>
     block starting at 22:00 the previous day has its revenue split across both calendar days by
     settlement period, not attributed whole to a single day.
     {% if non_positive_participants %}
-    {{ non_positive_participants|length }} participant(s) had zero or net-negative revenue today (a
+    {{ non_positive_participants|length }} participant(s) had zero or net-negative revenue on this day (a
     unit can be paid a negative clearing price to provide response) &mdash; not shown as chart
     segments, since a donut can't represent a negative share of a whole: combined
     £{{ non_positive_total_gbp|commas(2) }}.
@@ -82,7 +88,10 @@ and see their own EAC and Balancing Mechanism activity in detail.</p>
     </p>
   </details>
   {% else %}
-  <div class="empty-state">No EAC auctions have cleared yet today.</div>
+  <div class="empty-state">
+    {% if auction_day == 'tomorrow' %}No EAC auctions have cleared for tomorrow yet.
+    {% else %}No EAC auctions have cleared yet today.{% endif %}
+  </div>
   {% endif %}
 </div>
 
@@ -111,9 +120,9 @@ and see their own EAC and Balancing Mechanism activity in detail.</p>
   <div class="row">
     <div class="flabel">Window</div>
     <div class="range">
-      <a href="?window=7" class="{{ 'on' if window == 7 else '' }}">Last 7 days</a>
-      <a href="?window=30" class="{{ 'on' if window == 30 else '' }}">Last 30 days</a>
-      <a href="?window=90" class="{{ 'on' if window == 90 else '' }}">Last 90 days</a>
+      <a href="?window=7&auction_day={{ auction_day }}" class="{{ 'on' if window == 7 else '' }}">Last 7 days</a>
+      <a href="?window=30&auction_day={{ auction_day }}" class="{{ 'on' if window == 30 else '' }}">Last 30 days</a>
+      <a href="?window=90&auction_day={{ auction_day }}" class="{{ 'on' if window == 90 else '' }}">Last 90 days</a>
     </div>
   </div>
 </div>

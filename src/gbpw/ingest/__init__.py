@@ -2,10 +2,22 @@ from __future__ import annotations
 
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import eac, elexon, elexon_bm, entsoe_flows, neso_embedded, pvlive, semo_flows, wind_curtailment
+from . import (
+    carbon_intensity,
+    eac,
+    elexon,
+    elexon_bm,
+    entsoe_flows,
+    fuelinst,
+    lccc,
+    neso_embedded,
+    pvlive,
+    semo_flows,
+    wind_curtailment,
+)
 from ..settlement import bid_data_published, week_dates
 from ..storage import (
     BmCashflowRow,
@@ -14,7 +26,10 @@ from ..storage import (
     log_fetch,
     upsert_bm_cashflows,
     upsert_bm_unit_reference,
+    upsert_carbon_intensity,
+    upsert_carbon_intensity_factors,
     upsert_eac_results,
+    upsert_fuelinst,
     upsert_prices,
     wind_elexon_units,
 )
@@ -42,6 +57,14 @@ EAC_CHUNK_DAYS = 7  # bounds each NESO request; also the resumability granularit
 
 BM_CASHFLOW_SERIES = "bm_cashflow"
 BM_REFERENCE_SERIES = "bm_unit_reference"
+
+FUELINST_SERIES = "fuelinst"
+FUELINST_WINDOW_MINUTES = 35  # generous enough to still catch the latest 5-min publish even if a refresh cycle runs a few minutes late
+
+CARBON_INTENSITY_SERIES = "carbon_intensity"
+CARBON_INTENSITY_FACTORS_SERIES = "carbon_intensity_factors"
+
+IMRP_SERIES = "imrp"
 
 
 def ingest_day(conn: sqlite3.Connection, d: date) -> None:
@@ -215,14 +238,16 @@ def _to_float(v: object) -> float | None:
     return float(v)  # type: ignore[arg-type]
 
 
-def ingest_solar_forecast(conn: sqlite3.Connection) -> None:
-    """NESO's embedded solar forecast (see ingest/neso_embedded.py) -- a
-    single rolling-window fetch, not date-scoped, so this is called once
-    per Live Market refresh cycle (background_refresh.py), not once per
-    date the way ingest_day()'s series are.
+def ingest_embedded_forecasts(conn: sqlite3.Connection) -> None:
+    """NESO's embedded solar + wind forecast (see ingest/neso_embedded.py)
+    -- a single rolling-window fetch, not date-scoped, so this is called
+    once per Live Market refresh cycle (background_refresh.py), not once
+    per date the way ingest_day()'s series are. Both series come from one
+    fetch, so one fetch_log entry covers both (a failure here means both
+    are stale, not just one).
     """
     try:
-        rows, note = neso_embedded.fetch_solar_forecast()
+        rows, note = neso_embedded.fetch_embedded_forecasts()
         upsert_prices(conn, rows)
         log_fetch(conn, "solar_forecast", date.today(), ok=True, note=note)
     except Exception as e:  # noqa: BLE001
@@ -237,7 +262,7 @@ def ingest_interconnector_scheduled(conn: sqlite3.Connection, today: date) -> No
     only and would otherwise burden GB Power Weekly's historical report
     backfills (which call ingest_day() for dozens of unrelated past dates)
     with ENTSO-E/SEMO calls they have no use for. Called once per Live
-    Market refresh cycle instead, same reasoning as ingest_solar_forecast().
+    Market refresh cycle instead, same reasoning as ingest_embedded_forecasts().
     Each source logged independently -- e.g. a missing ENTSOE_KEY must not
     hide a working SEMO fetch, or vice versa.
     """
@@ -291,6 +316,67 @@ def ingest_wind_curtailment(conn: sqlite3.Connection, today: date) -> None:
         log_fetch(conn, "wind_curtailed_mw", today, ok=True, note=note)
     except Exception as e:  # noqa: BLE001
         log_fetch(conn, "wind_curtailed_mw", today, ok=False, note=str(e))
+
+
+def ingest_fuelinst(conn: sqlite3.Connection) -> None:
+    """FUELINST generation-by-fuel-type for the Live Market Generation tab
+    -- a trailing window, not date-scoped (see fuelinst.fetch_fuelinst()),
+    called once per Live Market refresh cycle same as
+    ingest_embedded_forecasts()/ingest_interconnector_scheduled(). Naturally
+    self-limiting: display only ever reads "today so far", so there's no
+    need to bound or prune the table here.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        rows, note = fuelinst.fetch_fuelinst(now - timedelta(minutes=FUELINST_WINDOW_MINUTES), now)
+        upsert_fuelinst(conn, rows)
+        log_fetch(conn, FUELINST_SERIES, date.today(), ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, FUELINST_SERIES, date.today(), ok=False, note=str(e))
+
+
+def ingest_carbon_intensity(conn: sqlite3.Connection) -> None:
+    """NESO Carbon Intensity API's headline figure + its official
+    gCO2/kWh factors (see ingest/carbon_intensity.py) -- both endpoints
+    always resolve to "now", so, like ingest_fuelinst(), this is called
+    once per Live Market refresh cycle rather than being date-scoped.
+    Logged as two series since they're two independent HTTP calls -- one
+    failing must not hide the other succeeding. The factors barely
+    change, but are re-ingested every cycle anyway rather than hardcoded
+    -- carbon_intensity_metrics.emissions_mix() applies them to
+    FUELINST's own generation mix for the donut's emissions-weighted %.
+    """
+    try:
+        row, note = carbon_intensity.fetch_carbon_intensity()
+        upsert_carbon_intensity(conn, row)
+        log_fetch(conn, CARBON_INTENSITY_SERIES, date.today(), ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, CARBON_INTENSITY_SERIES, date.today(), ok=False, note=str(e))
+
+    try:
+        rows, note = carbon_intensity.fetch_carbon_intensity_factors()
+        upsert_carbon_intensity_factors(conn, rows)
+        log_fetch(conn, CARBON_INTENSITY_FACTORS_SERIES, date.today(), ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, CARBON_INTENSITY_FACTORS_SERIES, date.today(), ok=False, note=str(e))
+
+
+def ingest_imrp(conn: sqlite3.Connection) -> None:
+    """LCCC's Intermittent Market Reference Price (see ingest/lccc.py) --
+    a single fetch-the-whole-table call, not date-scoped from this
+    module's point of view (the table is only ~90k rows total and grows
+    by 24/day, so re-fetching everything every cycle is cheap and always
+    current -- same shape as ingest_embedded_forecasts(), not the
+    EAC-style chunked _range()/_range_parallel() pair). This one call
+    both keeps the series current *and* performs its own one-time
+    backfill on the very first run.
+    """
+    try:
+        rows, note = lccc.fetch_imrp()
+        upsert_prices(conn, rows)
+        log_fetch(conn, IMRP_SERIES, date.today(), ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, IMRP_SERIES, date.today(), ok=False, note=str(e))
 
 
 def ingest_bmu_reference(conn: sqlite3.Connection) -> None:

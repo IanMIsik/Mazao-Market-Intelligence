@@ -205,3 +205,29 @@ def test_actual_and_addon_vs_forecast_empty_when_nothing_yet(tmp_path):
     conn = connect(tmp_path / "test.db")
     result = lmm.actual_and_addon_vs_forecast(conn, "wind", "wind_curtailed_mw", "wind_forecast", date(2026, 9, 16))
     assert result == {"points": []}
+
+
+def test_dual_series_today_pairs_by_settlement_period(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    today = date(2026, 9, 16)
+    upsert_prices(conn, [
+        PriceRow("imbalance", today, 1, "latest", 145.2),
+        PriceRow("imbalance", today, 2, "latest", 150.0),
+        PriceRow("imbalance_volume", today, 1, "latest", -320.5),
+        # SP2's volume hasn't cleared yet -- price for SP2 must still show, paired with None.
+        PriceRow("imbalance_volume", today, 3, "latest", 210.0),  # volume-only period
+    ])
+
+    result = lmm.dual_series_today(conn, "imbalance", "imbalance_volume", today)
+
+    assert result == {"points": [
+        {"sp": 1, "a": 145.2, "b": -320.5},
+        {"sp": 2, "a": 150.0, "b": None},
+        {"sp": 3, "a": None, "b": 210.0},
+    ]}
+
+
+def test_dual_series_today_empty_when_nothing_yet(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    result = lmm.dual_series_today(conn, "imbalance", "imbalance_volume", date(2026, 9, 16))
+    assert result == {"points": []}

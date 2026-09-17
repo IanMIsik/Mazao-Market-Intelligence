@@ -2,11 +2,6 @@
 {% block title %}Live market | Mazao Consulting{% endblock %}
 
 {% block extra_head %}
-<!-- Same reasoning as BESS Analytics' meta refresh: this page is only
-     useful if it's current, and a plain reload on the same URL is the
-     simplest way to guarantee that. 300s = 5 minutes, matching BESS and
-     background_refresh.py's DEFAULT_INTERVAL_SECONDS. -->
-<meta http-equiv="refresh" content="300">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -32,9 +27,11 @@
 
 <input type="radio" name="lm-tab" id="lm-tab-fundamentals" checked>
 <input type="radio" name="lm-tab" id="lm-tab-interconnectors">
+<input type="radio" name="lm-tab" id="lm-tab-generation">
 <div class="lm-tabs">
   <label for="lm-tab-fundamentals">Fundamentals</label>
   <label for="lm-tab-interconnectors">Interconnectors</label>
+  <label for="lm-tab-generation">Generation</label>
 </div>
 
 <div class="lm-panel lm-panel-fundamentals">
@@ -61,10 +58,10 @@
       {% endif %}
     </div>
     <div class="lm-kpi">
-      <div class="k">Wind output, latest</div>
-      {% if wind_cmp.latest_actual is not none %}
-      <div class="v">{{ (wind_cmp.latest_actual / 1000)|commas(2) }} <small>GW</small></div>
-      <div class="delta flat">SP{{ wind_cmp.latest_sp }}</div>
+      <div class="k" title="Net Imbalance Volume (NIV) -- the net energy imbalance across the whole GB system for the settlement period">Imbalance volume, latest</div>
+      {% if imbalance_volume_today.latest_value is not none %}
+      <div class="v">{{ imbalance_volume_today.latest_value|commas(1) }} <small>MWh</small></div>
+      <div class="delta flat">SP{{ imbalance_volume_today.latest_sp }}</div>
       {% else %}<div class="v">&mdash;</div><div class="delta flat">no data yet today</div>{% endif %}
     </div>
     <div class="lm-kpi">
@@ -121,6 +118,17 @@
         <span><i class="dashed"></i>Forecast</span>
       </div>
       {% if solar_cmp_svg %}{{ solar_cmp_svg | safe }}{% else %}<div class="lm-empty">No solar data published yet today.</div>{% endif %}
+    </div>
+    <div class="lm-card">
+      <div class="lm-card-title">Imbalance: price &amp; volume</div>
+      <div class="lm-card-sub">today so far &middot; price (left axis, £/MWh) is the same systemSellPrice shown above
+      &middot; volume (right axis, MWh) is the Net Imbalance Volume (NIV) for the settlement period, and can be
+      negative</div>
+      <div class="lm-legend">
+        <span><i style="background:var(--lm-amber);"></i>Price</span>
+        <span><i style="background:var(--lm-violet);"></i>Volume</span>
+      </div>
+      {% if imbalance_dual_svg %}{{ imbalance_dual_svg | safe }}{% else %}<div class="lm-empty">No imbalance data published yet today.</div>{% endif %}
     </div>
   </div>
   <p class="section-note">Today so far &mdash; a live, partial picture, not a final tally.</p>
@@ -181,4 +189,286 @@
   </div>
 </div>
 
+<div class="lm-panel lm-panel-generation">
+  <p class="section-note" style="margin:18px 0 4px;">
+    Generation by fuel type, from Elexon's FUELINST dataset (published every 5 minutes) &middot;
+    wind is shown as actual + capacity instructed off via the Balancing Mechanism, same correction
+    as the Fundamentals tab's wind chart &middot; interconnector flows are excluded from Generation
+    Mix (see the Interconnectors tab) &middot; embedded solar isn't in FUELINST and isn't shown there.
+  </p>
+
+  <div class="lm-gen-row">
+    <div class="lm-card lm-gen-card">
+      <div class="lm-card-title">Generation Mix</div>
+      {% if generation_mix_svg %}
+      <div class="donut-row">
+        <div class="donut-wrap">
+          {{ generation_mix_svg | safe }}
+          <div class="donut-selected-label" id="generation-donut-label" data-default="All fuel types">All fuel types</div>
+        </div>
+        <div class="donut-legend">
+          {% for entry in generation_legend %}
+          <div class="legend-item"><span class="swatch" style="background:{{ entry.color }};"></span>{{ entry.fuel_type }}<span class="pct">{{ entry.pct|commas(1) }}%</span></div>
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
+      <div class="lm-empty">No generation data published yet today.</div>
+      {% endif %}
+    </div>
+
+    <div class="lm-card lm-gen-card">
+      <div class="lm-card-title">Generation Type</div>
+      <div class="lm-card-sub">current snapshot &middot; Fossil Fuels / Renewables / Low Carbon / Other &middot;
+      Renewables includes embedded solar, Low Carbon includes nuclear plus long-term low-carbon imports
+      (French, Norwegian), Other includes biomass, pumped storage and every other import leg</div>
+      {% if generation_category_svg %}{{ generation_category_svg | safe }}{% else %}<div class="lm-empty">No generation data published yet today.</div>{% endif %}
+    </div>
+
+    <div class="lm-card lm-gen-card">
+      <div class="lm-card-title">Carbon Intensity</div>
+      <div class="lm-card-sub">NESO's own Carbon Intensity API (not Elexon) &middot; center figure is the CI of
+      the grid overall for the current half-hour, based on NESO's CI <strong>forecast</strong> &mdash; 'point of
+      generation', not lifecycle, emissions &middot; donut shows how each source contributes to those emissions
+      by %, using the same latest 5-minute generation data as Generation Mix</div>
+      {% if carbon_intensity_svg %}
+      <div class="donut-row">
+        <div class="donut-wrap donut-center-wrap">
+          {{ carbon_intensity_svg | safe }}
+          <div class="donut-selected-label donut-center-label" id="carbon-intensity-donut-label" data-default="{{ ci_center_label }}">{{ ci_center_label }}</div>
+        </div>
+        <div class="donut-legend">
+          {% for entry in ci_legend %}
+          <div class="legend-item"><span class="swatch" style="background:{{ entry.color }};"></span>{{ entry.label }}<span class="pct">{{ entry.pct|commas(1) }}%</span></div>
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
+      <div class="lm-empty">No carbon intensity data published yet today.</div>
+      {% endif %}
+      <details>
+        <summary>Methodology &amp; attribution</summary>
+        <p class="section-note">Hover a slice to see its own CI factor and how it's calculated. Figures for
+        imports are separated by country where NESO publishes a distinct factor (France, Netherlands, Ireland)
+        &mdash; CI varies a lot by source grid, e.g. France is mainly nuclear while Irish imports have a
+        relatively high proportion of fossil fuels in the mix. Every other import country is grouped as "Other
+        imports" using the generic factor, since NESO doesn't publish a country-specific one for those links.
+        Battery and Pumped Storage are treated as zero CI at point of generation. Data updates every 5 minutes.
+        See NESO's <a href="https://carbonintensity.org.uk/" target="_blank" rel="noopener" style="color:var(--lm-teal);">Carbon
+        Intensity site</a> for a list of CIs used and to search historical CI data going back to 2009.</p>
+        <p class="section-note">Contains BMRS data &copy; Elexon Limited copyright and database right 2026.
+        Uses NESO's Carbon Intensity API.</p>
+      </details>
+    </div>
+  </div>
+
+  <div class="lm-card-title" style="margin-top:26px;">GB Power Flow</div>
+  <div class="lm-card-sub">today so far &middot; BM Generation, Imports, LV Wind and Embedded Solar feed the
+  central generation-mix donut, which in turn feeds Pumped Storage, Exports and Other demand &middot; Total
+  Demand is Transmission System Demand (ITSDO) plus embedded wind/solar, not the Fundamentals tab's Demand
+  figure (INDO) &mdash; the two don't reconcile against generation the same way &middot; "Other demand" is a
+  residual (distribution-level demand, transmission losses and generators' own station load, combined) since
+  station load has no public GB-wide figure of its own</div>
+  <div class="pf-flow-container">
+    <svg class="pf-lines" id="pf-lines" aria-hidden="true"></svg>
+    <div class="pf-flow">
+      <div class="pf-col">
+        <div class="pf-col-heading">Generation</div>
+        <div class="pf-ring-row"><span class="pf-ring-label">BM Generation</span>
+          <div class="donut-wrap donut-center-wrap pf-bm-donut-wrap" id="pf-bm-generation" data-flow="in" data-flow-color="var(--lm-teal)">
+            {{ bm_generation_svg | safe }}
+            <div class="donut-selected-label donut-center-label" id="bm-generation-donut-label" data-default="{{ flow.bm_generation_mw|gw|commas(2) }} GW">{{ flow.bm_generation_mw|gw|commas(2) }} GW</div>
+          </div></div>
+        <div class="pf-ring-row"><span class="pf-ring-label">Imports</span>
+          <div class="pf-ring pf-ring-import" id="pf-imports" data-flow="in" data-flow-color="var(--lm-teal)" title="{{ import_tooltip }}">{{ flow.imports_mw|gw|commas(2) }}<small>GW</small></div></div>
+        <div class="pf-ring-row"><span class="pf-ring-label">LV Wind</span>
+          <div class="pf-ring pf-ring-wind" id="pf-lv-wind" data-flow="in" data-flow-color="var(--lm-teal)">{{ flow.embedded_wind_mw|gw|commas(2) }}<small>GW</small></div></div>
+        <div class="pf-ring-row"><span class="pf-ring-label">Embedded Solar</span>
+          <div class="pf-ring pf-ring-solar" id="pf-embedded-solar" data-flow="in" data-flow-color="var(--lm-teal)">{{ flow.embedded_solar_mw|gw|commas(2) }}<small>GW</small></div></div>
+      </div>
+      <div class="pf-col pf-col-center">
+        <div class="donut-wrap donut-center-wrap pf-sources-wrap" id="pf-center">
+          {{ pf_sources_svg | safe }}
+          <div class="donut-selected-label donut-center-label" id="pf-sources-donut-label" data-default="{{ pf_center_label }}">{{ pf_center_label }}</div>
+        </div>
+        <div class="pf-col-heading" style="margin-top:8px;">GB Production</div>
+        <div class="pf-headline-mini">Total Demand {{ flow.total_demand_mw|gw|commas(2) }} GW &middot;
+        Net Demand {{ flow.net_demand_mw|gw|commas(2) }} GW</div>
+      </div>
+      <div class="pf-col">
+        <div class="pf-col-heading">Demand</div>
+        <div class="pf-ring-row"><span class="pf-ring-label">Pumped storage (charging)</span>
+          <div class="pf-ring pf-ring-ps" id="pf-pumped-storage" data-flow="out" data-flow-color="var(--lm-violet)">{{ flow.pumped_storage_charge_mw|gw|commas(2) }}<small>GW</small></div></div>
+        <div class="pf-ring-row"><span class="pf-ring-label">Exports</span>
+          <div class="pf-ring pf-ring-export" id="pf-exports" data-flow="out" data-flow-color="var(--lm-violet)" title="{{ export_tooltip }}">{{ flow.exports_mw|gw|commas(2) }}<small>GW</small></div></div>
+        <div class="pf-ring-row"><span class="pf-ring-label">Other demand</span>
+          <div class="pf-ring pf-ring-other" id="pf-other-demand" data-flow="out" data-flow-color="var(--lm-violet)">{{ flow.other_demand_mw|gw|commas(2) }}<small>GW</small></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_body %}
+<script>
+(function () {
+  // Remembers which Fundamentals/Interconnectors/Generation tab is
+  // selected across the polling script's own location.reload() below --
+  // without this, a background refresh landing while someone's looking
+  // at the Generation tab silently bounced them back to Fundamentals
+  // (the radio's own hardcoded `checked` default) a few minutes later,
+  // which read as the page "redirecting" on its own.
+  try {
+    var saved = sessionStorage.getItem('lmActiveTab');
+    if (saved) {
+      var savedTab = document.getElementById(saved);
+      if (savedTab) savedTab.checked = true;
+    }
+    document.querySelectorAll('input[name="lm-tab"]').forEach(function (tab) {
+      tab.addEventListener('change', function () {
+        try { sessionStorage.setItem('lmActiveTab', tab.id); } catch (e) {}
+      });
+    });
+  } catch (e) {}  // sessionStorage can throw in a locked-down/private context -- tabs still work, just don't persist
+})();
+</script>
+<script>
+(function () {
+  var lastUpdated = document.body.dataset.lastUpdated || '';
+  setInterval(function () {
+    fetch('/live/status', {cache: 'no-store'}).then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.last_updated && data.last_updated > lastUpdated) location.reload();
+      })
+      .catch(function () {});  // a failed poll just tries again next interval
+  }, 20000);
+})();
+</script>
+<script>
+(function () {
+  // Shared click-to-select/click-outside-to-reset behaviour for every
+  // donut on this page -- each donut's slices carry generic
+  // data-label/data-value/data-pct attributes (see
+  // charts_generation.donut_svg()), so one wiring function covers all
+  // of them; only the "selected" text format differs per donut.
+  function wireDonut(svgId, labelId, formatSelected) {
+    var svg = document.getElementById(svgId);
+    if (!svg) return;  // no data for this donut yet today -- nothing to wire up
+
+    var label = document.getElementById(labelId);
+    // Read the default (deselected) text from the label's own
+    // server-rendered content/data-default attribute rather than a
+    // hardcoded JS string -- Carbon Intensity's default is the live CI
+    // figure, not a fixed label like Generation Mix's "All fuel types".
+    var defaultText = label.dataset.default || label.textContent;
+    var slices = svg.querySelectorAll('.donut-slice');
+    var selected = null;
+
+    function render() {
+      label.textContent = selected ? formatSelected(selected.dataset) : defaultText;
+    }
+
+    slices.forEach(function (slice) {
+      slice.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (selected === slice) {
+          selected.classList.remove('selected');
+          selected = null;
+        } else {
+          if (selected) selected.classList.remove('selected');
+          selected = slice;
+          selected.classList.add('selected');
+        }
+        render();
+      });
+    });
+
+    document.addEventListener('click', function (e) {
+      if (selected && !svg.contains(e.target)) {
+        selected.classList.remove('selected');
+        selected = null;
+        render();
+      }
+    });
+  }
+
+  wireDonut('generation-mix-donut', 'generation-donut-label', function (d) {
+    return d.label + ': ' + Number(d.value).toLocaleString('en-GB') + ' MW (' + d.pct + '%)';
+  });
+  wireDonut('carbon-intensity-donut', 'carbon-intensity-donut-label', function (d) {
+    return d.label + ': ' + d.pct + '% of emissions';
+  });
+  wireDonut('bm-generation-donut', 'bm-generation-donut-label', function (d) {
+    return d.label + ': ' + Number(d.value).toLocaleString('en-GB') + ' MW (' + d.pct + '%)';
+  });
+  wireDonut('pf-sources-donut', 'pf-sources-donut-label', function (d) {
+    return d.label + ': ' + Number(d.value).toLocaleString('en-GB') + ' MW (' + d.pct + '%)';
+  });
+})();
+</script>
+<script>
+(function () {
+  // GB Power Flow's connecting lines -- drawn with real pixel
+  // coordinates (getBoundingClientRect) rather than CSS, since the two
+  // sides have different node counts and aren't aligned row-for-row.
+  // Every [data-flow] node is measured relative to #pf-center and one
+  // <line> is added per node -- "in" nodes point at the center, "out"
+  // nodes point away from it -- each with a moving dash pattern (see
+  // .pf-flow-line's animation in app.css) and an arrowhead marker.
+  var container = document.querySelector('.pf-flow-container');
+  var genTab = document.getElementById('lm-tab-generation');
+  if (!container || !genTab) return;
+  var svg = document.getElementById('pf-lines');
+  var center = document.getElementById('pf-center');
+  if (!svg || !center) return;
+
+  var defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  defs.innerHTML =
+    '<marker id="pf-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">' +
+    '<path d="M0,0 L10,5 L0,10 z" fill="context-stroke"></path></marker>';
+  svg.appendChild(defs);
+
+  function point(el) {
+    var r = el.getBoundingClientRect();
+    var host = container.getBoundingClientRect();
+    return {x: r.left + r.width / 2 - host.left, y: r.top + r.height / 2 - host.top};
+  }
+
+  function addLine(a, b, color) {
+    var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', a.x.toFixed(1));
+    line.setAttribute('y1', a.y.toFixed(1));
+    line.setAttribute('x2', b.x.toFixed(1));
+    line.setAttribute('y2', b.y.toFixed(1));
+    line.setAttribute('stroke', color);
+    line.setAttribute('stroke-width', '1.5');
+    line.setAttribute('stroke-dasharray', '5 5');
+    line.setAttribute('marker-end', 'url(#pf-arrow)');
+    line.setAttribute('class', 'pf-flow-line');
+    svg.appendChild(line);
+  }
+
+  function draw() {
+    if (!genTab.checked) return;  // hidden tab -- every rect would measure 0
+    svg.setAttribute('width', container.clientWidth);
+    svg.setAttribute('height', container.clientHeight);
+    svg.querySelectorAll('.pf-flow-line').forEach(function (el) { el.remove(); });
+    var c = point(center);
+    document.querySelectorAll('[data-flow="in"]').forEach(function (el) {
+      addLine(point(el), c, el.dataset.flowColor || 'currentColor');
+    });
+    document.querySelectorAll('[data-flow="out"]').forEach(function (el) {
+      addLine(c, point(el), el.dataset.flowColor || 'currentColor');
+    });
+  }
+
+  draw();
+  window.addEventListener('resize', draw);
+  // The Generation tab (and this card within it) is display:none until
+  // selected -- getBoundingClientRect only returns real numbers once
+  // it's actually visible, so redraw right when that happens.
+  genTab.addEventListener('change', function () { setTimeout(draw, 0); });
+})();
+</script>
 {% endblock %}

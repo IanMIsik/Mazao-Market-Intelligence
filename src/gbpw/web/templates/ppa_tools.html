@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}PPA Tools | Mazao Consulting{% endblock %}
+
+{% block content %}
+
+<header>
+  <div class="brand2">PPA Tools</div>
+  <div class="stamp num">{{ start.strftime('%d %b %Y') }} &ndash; {{ end.strftime('%d %b %Y') }}</div>
+</header>
+
+<h1>Wind and solar capture price against LCCC's day-ahead reference.</h1>
+<p class="byline">Capture rate shows how much of the average day-ahead price each technology actually
+earned over the selected window &mdash; below 100% means it tends to generate when the market price is
+already low. Uses LCCC's Intermittent Market Reference Price (IMRP), not the Elexon Market Index Data
+used elsewhere on this site &mdash; see the methodology note below for why.
+Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine</a>.</p>
+
+<div class="filters">
+  <div class="row">
+    <div class="flabel">Window</div>
+    <div class="range">
+      {% for key, label in windows.items() %}
+      <a href="?window={{ key }}" class="{{ 'on' if window == key else '' }}">{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="kpis">
+  <div class="kpi">
+    <div class="k">Wind capture rate</div>
+    <div class="v num">{% if wind.capture_rate_pct is not none %}{{ wind.capture_rate_pct|commas(1) }}%{% else %}&mdash;{% endif %}</div>
+    <div class="ref num">
+      {% if wind.capture_price_gbp_mwh is not none %}£{{ wind.capture_price_gbp_mwh|commas(2) }}/MWh captured &middot; {{ wind.total_generation_mwh|commas(0) }} MWh{% else %}no wind generation in this window{% endif %}
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="k">Solar capture rate</div>
+    <div class="v2 num">{% if solar.capture_rate_pct is not none %}{{ solar.capture_rate_pct|commas(1) }}%{% else %}&mdash;{% endif %}</div>
+    <div class="ref num">
+      {% if solar.capture_price_gbp_mwh is not none %}£{{ solar.capture_price_gbp_mwh|commas(2) }}/MWh captured &middot; {{ solar.total_generation_mwh|commas(0) }} MWh{% else %}no solar generation in this window{% endif %}
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="k">IMRP baseload price</div>
+    <div class="v num">{% if wind.baseload_price_gbp_mwh is not none %}£{{ wind.baseload_price_gbp_mwh|commas(2) }}/MWh{% else %}&mdash;{% endif %}</div>
+    <div class="ref num">plain time-average over the window</div>
+  </div>
+</div>
+
+<div>
+  <div class="cg-label">Capture rate by month</div>
+  {% if capture_rate_trend_svg %}
+  {{ capture_rate_trend_svg | safe }}
+  {% else %}
+  <div class="empty-state">No generation/price data ingested yet for this window.</div>
+  {% endif %}
+  </div>
+</div>
+
+<div class="today-card">
+  <div class="today-card-head">
+    <h2>Wind curtailment risk</h2>
+    <span class="section-note">Who bears curtailment risk is a real point wind PPAs negotiate over.</span>
+  </div>
+  <div class="kpis" id="curtailment-kpis">
+    <div class="kpi">
+      <div class="k">Curtailed output</div>
+      <div class="v num">{{ curtailment.curtailed_mwh|commas(0) }} MWh</div>
+    </div>
+    <div class="kpi">
+      <div class="k">Share of potential output curtailed</div>
+      <div class="v num">{% if curtailment.curtailed_pct is not none %}{{ curtailment.curtailed_pct|commas(1) }}%{% else %}&mdash;{% endif %}</div>
+      <div class="ref num">of {{ curtailment.potential_mwh|commas(0) }} MWh potential (actual + curtailed)</div>
+    </div>
+  </div>
+  <details>
+    <summary>Methodology &amp; scope</summary>
+    <p class="section-note">Capture price is the volume-weighted average price a technology's actual
+    generation achieved (sum of generation &times; price per half-hour, divided by total generation)
+    against LCCC's Intermittent Market Reference Price (IMRP) &mdash; the reference price LCCC itself
+    uses to calculate CfD top-up payments for wind/solar generators, calculated from day-ahead data
+    received from both EPEX Spot and NordPool. Baseload price is the plain time-average IMRP price over
+    the same window. This project's other pages (Live Market's Fundamentals tab) use a different series,
+    Elexon's Market Index Data, for day-ahead price &mdash; that series is, in practice, a single-exchange
+    (APXMIDP) proxy, which is why this page uses IMRP instead. Wind curtailment is instructed-off volume
+    via the Balancing Mechanism, already ingested for the Live Market Generation tab's "true wind
+    outturn" figure.</p>
+  </details>
+</div>
+
+{% endblock %}

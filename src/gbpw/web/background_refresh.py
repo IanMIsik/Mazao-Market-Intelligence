@@ -24,9 +24,12 @@ from pathlib import Path
 from ..ingest import (
     ingest_bm_cashflows_range_parallel,
     ingest_bmu_reference,
+    ingest_carbon_intensity,
     ingest_eac_range_parallel,
+    ingest_embedded_forecasts,
+    ingest_fuelinst,
+    ingest_imrp,
     ingest_interconnector_scheduled,
-    ingest_solar_forecast,
     ingest_week_parallel,
     ingest_wind_curtailment,
 )
@@ -41,15 +44,26 @@ TRAILING_WINDOW_DAYS = 3  # EAC/BM data for the last few days can still be revis
 def _refresh_once(db_path: Path) -> None:
     today = date.today()
     start = today - timedelta(days=TRAILING_WINDOW_DAYS)
+    # EAC clears day-ahead -- NESO routinely publishes tomorrow's auction
+    # results well before today is over (see routes_bess.py's auction_day
+    # toggle), but a range ending at `today` only ever picks up tomorrow's
+    # rows as an accident of EFA blocks that start today and run past
+    # midnight (see ingest/eac.py's own delivery-block-splitting), never
+    # the actual, complete day-ahead auction -- live-confirmed: NESO already
+    # had ~9.7k genuine rows across 44 settlement periods for tomorrow while
+    # this range only ever fetched ~870 spillover rows across 4. BM
+    # cashflow only ever exists for periods that have already settled, so
+    # its own range stays capped at `today`.
+    eac_end = today + timedelta(days=1)
 
     conn = connect(db_path)
     try:
         ingest_bmu_reference(conn)
     finally:
         conn.close()
-    ingest_eac_range_parallel(db_path, start, today)
+    ingest_eac_range_parallel(db_path, start, eac_end)
     ingest_bm_cashflows_range_parallel(db_path, start, today)
-    logger.info("background refresh: re-ingested EAC + BM cashflows for %s..%s", start, today)
+    logger.info("background refresh: re-ingested EAC for %s..%s, BM cashflows for %s..%s", start, eac_end, start, today)
 
     # Live Market only ever shows *today* live (the rest of its "week so
     # far" is already-settled data GB Power Weekly's own ingest covers) --
@@ -57,21 +71,39 @@ def _refresh_once(db_path: Path) -> None:
     ingest_week_parallel(db_path, [today])
     logger.info("background refresh: re-ingested today's Live Market fundamentals (incl. solar/forecasts/interconnectors) for %s", today)
 
-    # Not date-scoped (solar forecast) or Live-Market-only (scheduled
-    # interconnector flows) -- see ingest_solar_forecast()/
-    # ingest_interconnector_scheduled() docstrings for why these aren't
-    # folded into ingest_week_parallel()/ingest_day() above.
+    # Not date-scoped (embedded forecasts, carbon intensity) or
+    # Live-Market-only (scheduled interconnector flows) -- see
+    # ingest_embedded_forecasts()/ingest_interconnector_scheduled()
+    # docstrings for why these aren't folded into
+    # ingest_week_parallel()/ingest_day() above.
     conn = connect(db_path)
     try:
-        ingest_solar_forecast(conn)
+        ingest_embedded_forecasts(conn)
         ingest_interconnector_scheduled(conn, today)
         # Must run after ingest_week_parallel() above -- it queries
         # today's already-ingested `wind` periods to know which
         # settlement periods are even worth an ISPSTACK call yet.
         ingest_wind_curtailment(conn, today)
+        # FUELINST and the Carbon Intensity API both already publish on
+        # the same 5-minute-or-finer cadence as this loop, so no separate
+        # scheduling is needed -- they just join the rest of this
+        # Live-Market-only block.
+        ingest_fuelinst(conn)
+        ingest_carbon_intensity(conn)
+        # LCCC's IMRP table (PPA Tools' day-ahead price input, see
+        # ingest/lccc.py) is only ~90k rows and updates once a day on
+        # LCCC's side, so re-fetching the whole thing every 5-minute cycle
+        # is more often than the source itself changes -- accepted here
+        # rather than adding day-tracking logic, since a full fetch is
+        # still just a handful of paginated requests and every write is
+        # an idempotent upsert.
+        ingest_imrp(conn)
     finally:
         conn.close()
-    logger.info("background refresh: re-ingested solar forecast + scheduled interconnector flows + wind curtailment for %s", today)
+    logger.info(
+        "background refresh: re-ingested embedded forecasts + scheduled interconnector flows + "
+        "wind curtailment + fuelinst + carbon intensity + IMRP for %s", today,
+    )
 
 
 def start_background_refresh(db_path: Path, interval_seconds: int = DEFAULT_INTERVAL_SECONDS) -> threading.Event:
