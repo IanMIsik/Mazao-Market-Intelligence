@@ -183,6 +183,12 @@
         <span class="lm-flow-val" style="color:var(--lm-faint);">&mdash;</span>
         {% endif %}
       </div>
+      {% if ic.active_deviation %}
+      <div class="lm-flow-deviation" style="color:{{ 'var(--lm-amber)' if ic.active_deviation.direction == 'over' else 'var(--lm-teal)' }};">
+        {{ 'Overperforming' if ic.active_deviation.direction == 'over' else 'Underperforming' }} by
+        ~{{ ic.active_deviation.avg_deviation_mw|commas(0) }} MW, since SP{{ ic.active_deviation.start_sp }}
+      </div>
+      {% endif %}
       {% if ic.cmp_svg %}{{ ic.cmp_svg | safe }}{% else %}<div class="lm-empty">No flow data published yet today.</div>{% endif %}
     </div>
     {% endfor %}

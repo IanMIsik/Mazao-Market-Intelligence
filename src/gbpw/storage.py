@@ -204,6 +204,33 @@ CREATE TABLE IF NOT EXISTS carbon_intensity_factors (
     fetched_at TEXT NOT NULL,
     PRIMARY KEY (key)
 );
+
+-- LCCC's CfD Allocation Round "Auction Outcomes" -- one row per project
+-- per round (AR1 onward), not a (sd, sp) time series, so this doesn't
+-- fit the generic `prices` table the way IMRP does (see ingest/lccc.py
+-- vs ingest/cfd_auctions.py). lccc_id is the source's own `_id` -- a
+-- safe surrogate key, not a guessed composite of (auction, project_name)
+-- which risks collision if a name is ever reused. price_base_year (2012
+-- or 2024) is this project's own derived fact, not present in the
+-- source data -- see ingest/cfd_auctions.py's PRICE_BASE_YEAR mapping
+-- for why, and why it's stored per-row rather than assumed at read time.
+CREATE TABLE IF NOT EXISTS cfd_auction_outcomes (
+    lccc_id              INTEGER NOT NULL,
+    auction              TEXT NOT NULL,
+    project_name         TEXT NOT NULL,
+    developer            TEXT,
+    technology_type      TEXT NOT NULL,
+    capacity_mw          REAL,
+    strike_price_gbp_mwh REAL NOT NULL,
+    price_base_year      INTEGER NOT NULL,
+    delivery_year        TEXT,
+    region               TEXT,
+    publication_date     TEXT,
+    fetched_at           TEXT NOT NULL,
+    PRIMARY KEY (lccc_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cfd_auction ON cfd_auction_outcomes(auction);
+CREATE INDEX IF NOT EXISTS idx_cfd_technology ON cfd_auction_outcomes(technology_type);
 """
 
 
@@ -273,6 +300,21 @@ class CarbonIntensityRow:
 class CarbonIntensityFactorRow:
     key: str
     factor: float
+
+
+@dataclass(frozen=True)
+class CfdAuctionOutcomeRow:
+    lccc_id: int
+    auction: str
+    project_name: str
+    developer: str | None
+    technology_type: str
+    capacity_mw: float | None
+    strike_price_gbp_mwh: float
+    price_base_year: int
+    delivery_year: str | None
+    region: str | None
+    publication_date: str | None
 
 
 # Guards the WAL-mode switch + schema creation below, not regular
@@ -514,6 +556,43 @@ def upsert_carbon_intensity_factors(
         VALUES (?, ?, ?)
         ON CONFLICT (key) DO UPDATE SET
             factor = excluded.factor,
+            fetched_at = excluded.fetched_at
+        """,
+        data,
+    )
+    conn.commit()
+    return len(data)
+
+
+def upsert_cfd_auction_outcomes(
+    conn: sqlite3.Connection, rows: Iterable[CfdAuctionOutcomeRow], fetched_at: datetime | None = None
+) -> int:
+    fetched_at = fetched_at or datetime.now(timezone.utc)
+    ts = fetched_at.isoformat()
+    data = [
+        (
+            r.lccc_id, r.auction, r.project_name, r.developer, r.technology_type, r.capacity_mw,
+            r.strike_price_gbp_mwh, r.price_base_year, r.delivery_year, r.region, r.publication_date, ts,
+        )
+        for r in rows
+    ]
+    conn.executemany(
+        """
+        INSERT INTO cfd_auction_outcomes (
+            lccc_id, auction, project_name, developer, technology_type, capacity_mw,
+            strike_price_gbp_mwh, price_base_year, delivery_year, region, publication_date, fetched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (lccc_id) DO UPDATE SET
+            auction = excluded.auction,
+            project_name = excluded.project_name,
+            developer = excluded.developer,
+            technology_type = excluded.technology_type,
+            capacity_mw = excluded.capacity_mw,
+            strike_price_gbp_mwh = excluded.strike_price_gbp_mwh,
+            price_base_year = excluded.price_base_year,
+            delivery_year = excluded.delivery_year,
+            region = excluded.region,
+            publication_date = excluded.publication_date,
             fetched_at = excluded.fetched_at
         """,
         data,

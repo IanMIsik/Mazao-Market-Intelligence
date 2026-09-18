@@ -24,6 +24,16 @@ Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine
       {% endfor %}
     </div>
   </div>
+  {% if years %}
+  <div class="row">
+    <div class="flabel">Year</div>
+    <div class="range">
+      {% for y in years %}
+      <a href="?window={{ y }}" class="{{ 'on' if window == y|string else '' }}">{{ y }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 
 <div class="kpis">
@@ -48,14 +58,17 @@ Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine
   </div>
 </div>
 
-<div>
-  <div class="cg-label">Capture rate by month</div>
-  {% if capture_rate_trend_svg %}
-  {{ capture_rate_trend_svg | safe }}
+<div class="today-card">
+  <div class="today-card-head">
+    <h2>Capture rate by month</h2>
+    <span class="section-note">Wind vs. solar, against LCCC's IMRP baseload &mdash; below 100% means that
+    technology tended to generate when the market price was already low.</span>
+  </div>
+  {% if chart_data.labels %}
+  <canvas id="capture-rate-chart" height="90"></canvas>
   {% else %}
   <div class="empty-state">No generation/price data ingested yet for this window.</div>
   {% endif %}
-  </div>
 </div>
 
 <div class="today-card">
@@ -89,4 +102,122 @@ Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine
   </details>
 </div>
 
+<div class="today-card">
+  <div class="today-card-head">
+    <h2>CfD Allocation Round benchmark</h2>
+    <span class="section-note">Government-backed clearing prices, AR1&ndash;AR7 &mdash; a different kind of
+    reference point from the market-price figures above.</span>
+  </div>
+  {% if cfd_wind or cfd_solar %}
+  <div class="chart-grid">
+    <div>
+      <table>
+        <caption>Wind</caption>
+        <thead><tr><th>Round</th><th>Base year</th><th>Projects</th><th>Capacity (MW)</th><th>Avg strike price</th></tr></thead>
+        <tbody>
+          {% for r in cfd_wind %}
+          <tr>
+            <th scope="row">{{ r.auction }}</th>
+            <td>{{ r.price_base_year }}</td>
+            <td>{{ r.project_count }}</td>
+            <td>{{ r.total_capacity_mw|commas(0) }}</td>
+            <td>£{{ r.avg_strike_price_gbp_mwh|commas(2) }}/MWh</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <table>
+        <caption>Solar</caption>
+        <thead><tr><th>Round</th><th>Base year</th><th>Projects</th><th>Capacity (MW)</th><th>Avg strike price</th></tr></thead>
+        <tbody>
+          {% for r in cfd_solar %}
+          <tr>
+            <th scope="row">{{ r.auction }}</th>
+            <td>{{ r.price_base_year }}</td>
+            <td>{{ r.project_count }}</td>
+            <td>{{ r.total_capacity_mw|commas(0) }}</td>
+            <td>£{{ r.avg_strike_price_gbp_mwh|commas(2) }}/MWh</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <p class="section-note" style="margin-top:12px;">Capacity-weighted average strike price per round, from LCCC's
+  own published Allocation Round results. <strong>Rounds are not on a common price basis</strong> &mdash;
+  AR1&ndash;AR6 are quoted in 2012 real prices, AR7 in 2024 real prices (confirmed against government CfD policy
+  documents; AR6 figures need inflating by roughly 39% just to sit on AR7's own basis). These figures are
+  <strong>not</strong> converted to a common basis or to nominal terms here, and are not directly comparable to
+  the capture price/IMRP figures above without adjusting for that yourself. AR8 bidding closed in August 2026;
+  results aren't published yet.</p>
+  {% else %}
+  <div class="empty-state">No CfD Allocation Round data ingested yet &mdash; run <code>gbpw ingest-cfd-auctions</code>.</div>
+  {% endif %}
+</div>
+
+{% endblock %}
+
+{% block extra_body %}
+{% if chart_data.labels %}
+<!-- Chart.js: the one CDN-loaded library in this otherwise plain-Jinja2 app -- see the module docstring
+     in ppa_metrics.py's capture_rate_chart_data() for why a canvas-drawn chart replaced the hand-rolled
+     inline SVG this page used to render. Pinned to a major version, not @latest, so this page doesn't
+     silently change behaviour on some future Chart.js release. -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+(function () {
+  var canvas = document.getElementById('capture-rate-chart');
+  if (!canvas) return; // no data for this window -- the template already shows its own empty-state instead
+
+  var data = {{ chart_data | tojson }};
+  // Canvas can't resolve var(--wind)/var(--solar) the way the old inline SVG's stroke="var(--wind)"
+  // could, so these are the same colors' already-resolved hex values from app.css's :root block, not
+  // invented ones.
+  var WIND_COLOR = '#5A8F6E';
+  var SOLAR_COLOR = '#d9b64e';
+  var MUTED = '#6B7783';
+  var GRID = '#EAEEF3';
+
+  new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: data.labels,
+      datasets: [
+        {
+          label: 'Wind', data: data.wind, borderColor: WIND_COLOR, backgroundColor: WIND_COLOR,
+          spanGaps: false, tension: 0.15, pointRadius: 2, borderWidth: 2
+        },
+        {
+          label: 'Solar', data: data.solar, borderColor: SOLAR_COLOR, backgroundColor: SOLAR_COLOR,
+          spanGaps: false, tension: 0.15, pointRadius: 2, borderWidth: 2
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'top', labels: { color: '#2F3A45' } },
+        tooltip: {
+          callbacks: {
+            label: function (ctx) {
+              var v = ctx.parsed.y;
+              return ctx.dataset.label + ': ' + (v === null ? 'no data yet' : v.toFixed(1) + '% capture rate');
+            }
+          }
+        }
+      },
+      scales: {
+        // beginAtZero deliberately not set -- capture rate hovers ~75-110%, so a 0-based axis would
+        // flatten the exact trend this chart exists to show (same reasoning the old hand-drawn chart used).
+        y: { ticks: { color: MUTED, callback: function (v) { return v + '%'; } }, grid: { color: GRID } },
+        x: { ticks: { color: MUTED, maxRotation: 45, minRotation: 45, autoSkip: true, maxTicksLimit: 12 }, grid: { display: false } }
+      }
+    }
+  });
+})();
+</script>
+{% endif %}
 {% endblock %}

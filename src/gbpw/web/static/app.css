@@ -332,6 +332,7 @@ body.live .lm-flow-head { display:flex; justify-content:space-between; align-ite
 body.live .lm-flow-name { font-family:var(--lm-mono); font-size:12px; color:var(--lm-text); }
 body.live .lm-flow-name small { color:var(--lm-faint); font-size:10px; margin-left:5px; }
 body.live .lm-flow-val { font-family:var(--lm-mono); font-size:12px; color:var(--lm-text); }
+body.live .lm-flow-deviation { font-family:var(--lm-mono); font-size:10px; margin:-3px 0 6px; }
 @media (max-width:820px) { body.live .lm-flows { grid-template-columns:1fr; } }
 
 /* GB Power Flow -- generation sources (BM Generation, Imports, LV Wind,

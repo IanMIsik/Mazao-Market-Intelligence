@@ -105,12 +105,21 @@ def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db))
     interconnectors = []
     for key, name, country in sorted(INTERCONNECTORS.values(), key=lambda v: v[1]):
         cmp = lmm.actual_vs_forecast(db, f"interconnector_{key}_actual", f"interconnector_{key}_scheduled", today)
+        regions = lmm.deviation_regions(cmp["points"])
+        # Only the deviation happening right now, if any -- a run that
+        # ended earlier today (flow's back on schedule since) isn't shown
+        # at all, rather than as a stale "was overperforming since SP3"
+        # note that no longer describes what's happening. This page's
+        # figures are a live, current-state picture throughout; this is
+        # the same treatment, not a running log of today's deviations.
+        active_deviation = regions[-1] if regions and regions[-1]["end_sp"] == cmp["latest_sp"] else None
         interconnectors.append({
             "key": key,
             "name": name,
             "country": country,
             "cmp": cmp,
             "cmp_svg": charts_live.comparison_svg(cmp["points"], "var(--lm-violet)", "var(--lm-dim)", "MW"),
+            "active_deviation": active_deviation,
         })
 
     mix = fim.current_mix(db, today)

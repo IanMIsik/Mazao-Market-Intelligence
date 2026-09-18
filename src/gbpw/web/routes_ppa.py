@@ -21,7 +21,6 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import ppa_metrics
-from . import charts_ppa
 from .deps import get_db
 
 router = APIRouter()
@@ -41,7 +40,14 @@ WINDOWS = {"ytd": "Year to date", "12m": "Last 12 months", "3y": "Last 3 years",
 DEFAULT_WINDOW = "12m"
 
 
+def _is_year(window: str) -> bool:
+    return len(window) == 4 and window.isdigit()
+
+
 def _window_dates(window: str, today: date) -> tuple[date, date]:
+    if _is_year(window):
+        year = int(window)
+        return date(year, 1, 1), min(date(year, 12, 31), today)
     if window == "ytd":
         return date(today.year, 1, 1), today
     if window == "3y":
@@ -53,7 +59,9 @@ def _window_dates(window: str, today: date) -> tuple[date, date]:
 
 @router.get("/ppa", response_class=HTMLResponse)
 def ppa_page(request: Request, window: str = DEFAULT_WINDOW, db: sqlite3.Connection = Depends(get_db)):
-    window = window if window in WINDOWS else DEFAULT_WINDOW
+    years = ppa_metrics.available_years(db)
+    valid_windows = set(WINDOWS) | {str(y) for y in years}
+    window = window if window in valid_windows else DEFAULT_WINDOW
     today = date.today()
     start, end = _window_dates(window, today)
 
@@ -64,16 +72,28 @@ def ppa_page(request: Request, window: str = DEFAULT_WINDOW, db: sqlite3.Connect
     wind_by_month = ppa_metrics.capture_price_by_month(db, "wind", start, end)
     solar_by_month = ppa_metrics.capture_price_by_month(db, "solar", start, end)
 
+    # CfD benchmark is window-independent (a fixed historical register of
+    # completed auctions, not something the date-range picker filters) --
+    # same treatment as the IMRP capture-price comparison already on this
+    # page not being scoped to a "window" either.
+    cfd_wind = ppa_metrics.cfd_benchmark(db, "wind")
+    cfd_solar = ppa_metrics.cfd_benchmark(db, "solar")
+
+    chart_data = ppa_metrics.capture_rate_chart_data(wind_by_month, solar_by_month)
+
     context = {
         "request": request,
         "active_nav": "ppa",
         "window": window,
         "windows": WINDOWS,
+        "years": years,
         "start": start,
         "end": end,
         "wind": wind,
         "solar": solar,
         "curtailment": curtailment,
-        "capture_rate_trend_svg": charts_ppa.capture_rate_trend_svg(wind_by_month, solar_by_month),
+        "chart_data": chart_data,
+        "cfd_wind": cfd_wind,
+        "cfd_solar": cfd_solar,
     }
     return templates.TemplateResponse(request, "ppa_tools.html", context)

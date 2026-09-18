@@ -10,6 +10,7 @@ Command-line entry point tying ingest / narrative / render / publish together.
     gbpw run        [--week-ending auto] [--out-dir out] [--regenerate]
     gbpw serve      [--host 127.0.0.1] [--port 5000] [--reload]
     gbpw load-fuel-types --file BMUFuelType.xlsx
+    gbpw ingest-cfd-auctions
 
 `run` is the one-shot form meant for a scheduler: ingest the trailing window
 then build, writing to <out-dir>/gbpw-<week-ending>.html. `--week-ending auto`
@@ -33,6 +34,13 @@ manually-downloaded NESO BM Unit Fuel Type spreadsheet merged with the live
 reference API (see ingest/bmu_fuel_types.py) -- run this whenever a fresh
 copy of that spreadsheet is downloaded. Powers wind curtailment on Live
 Market (identifying which BM units are wind, see ingest/wind_curtailment.py).
+
+`ingest-cfd-auctions` fetches LCCC's CfD Allocation Round strike-price
+results (AR1 onward, see ingest/cfd_auctions.py) for the PPA Tools page.
+Deliberately a manual command, not part of any automatic refresh cycle --
+a new round's results are a rare, newsworthy event (roughly once or
+twice a year), not something worth polling on a schedule. Run it again
+whenever a new round (e.g. AR8) is published.
 """
 
 from __future__ import annotations
@@ -50,6 +58,7 @@ from .ingest import (
     history_range as _history_range,
     ingest_bm_cashflows_range_parallel,
     ingest_bmu_reference,
+    ingest_cfd_auction_outcomes,
     ingest_eac_range_parallel,
     ingest_week_parallel,
 )
@@ -174,6 +183,12 @@ def main(argv: list[str] | None = None) -> None:
     p_fuel.add_argument("--file", type=Path, required=True, help="path to the downloaded BMUFuelType*.xlsx")
     p_fuel.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
+    p_cfd = sub.add_parser(
+        "ingest-cfd-auctions",
+        help="fetch and store LCCC's CfD Allocation Round strike-price results (AR1 onward) -- run when a new round's results are published, not on a schedule",
+    )
+    p_cfd.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+
     p_run = sub.add_parser("run", help="ingest + build in one step, for a scheduler")
     p_run.add_argument("--week-ending", type=_week_ending_or_auto, default="auto")
     p_run.add_argument("--out-dir", type=Path, default=Path("out"))
@@ -265,6 +280,23 @@ def main(argv: list[str] | None = None) -> None:
         n = upsert_bm_unit_reference(conn, rows, overwrite_fuel_type=True)
         wind_count = sum(1 for r in rows if r.fuel_type == "WIND")
         print(f"Done. {n:,} unit(s) on file, {wind_count:,} classified WIND.")
+
+    elif args.command == "ingest-cfd-auctions":
+        print("Fetching LCCC's CfD Allocation Round strike-price results...")
+        ingest_cfd_auction_outcomes(conn)
+        # This call's own log_fetch entry is necessarily the most recent one
+        # for this series (only this command ever writes it) -- checking
+        # THAT one row's ok value, not "has this series ever failed", so an
+        # old failure doesn't get mistaken for this run's own result.
+        last = conn.execute(
+            "SELECT ok, note FROM fetch_log WHERE series = 'cfd_auction_outcomes' ORDER BY ts DESC LIMIT 1"
+        ).fetchone()
+        if last and not last[0]:
+            print(f"Failed: {last[1]}")
+            sys.exit(1)
+        count = conn.execute("SELECT COUNT(*) FROM cfd_auction_outcomes").fetchone()[0]
+        rounds = conn.execute("SELECT DISTINCT auction FROM cfd_auction_outcomes ORDER BY auction").fetchall()
+        print(f"Done. {count:,} project result(s) on file across {len(rounds)} round(s): {', '.join(r[0] for r in rounds)}")
 
     elif args.command == "status":
         healthy = _print_status(conn, args.week_ending, args.history_days)

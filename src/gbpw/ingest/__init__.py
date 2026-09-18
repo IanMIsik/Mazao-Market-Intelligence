@@ -7,6 +7,7 @@ from pathlib import Path
 
 from . import (
     carbon_intensity,
+    cfd_auctions,
     eac,
     elexon,
     elexon_bm,
@@ -28,6 +29,7 @@ from ..storage import (
     upsert_bm_unit_reference,
     upsert_carbon_intensity,
     upsert_carbon_intensity_factors,
+    upsert_cfd_auction_outcomes,
     upsert_eac_results,
     upsert_fuelinst,
     upsert_prices,
@@ -65,6 +67,7 @@ CARBON_INTENSITY_SERIES = "carbon_intensity"
 CARBON_INTENSITY_FACTORS_SERIES = "carbon_intensity_factors"
 
 IMRP_SERIES = "imrp"
+CFD_AUCTIONS_SERIES = "cfd_auction_outcomes"
 
 
 def ingest_day(conn: sqlite3.Connection, d: date) -> None:
@@ -318,6 +321,27 @@ def ingest_wind_curtailment(conn: sqlite3.Connection, today: date) -> None:
         log_fetch(conn, "wind_curtailed_mw", today, ok=False, note=str(e))
 
 
+def ingest_wind_curtailment_range(conn: sqlite3.Connection, start: date, end: date) -> None:
+    """Backfills wind_curtailed_mw across [start, end], one day at a time.
+
+    Deliberately sequential across days, not wrapped in a second
+    ThreadPoolExecutor on top of ingest_wind_curtailment()'s own internal
+    16-way per-day parallelism (wind_curtailment.MAX_WORKERS) -- stacking
+    another layer would mean dozens of concurrent connections to Elexon
+    for no real throughput gain, since ISPSTACK's one-call-per-period
+    cost is the actual bottleneck here, not this process's own CPU.
+    Reuses ingest_wind_curtailment(conn, d) verbatim per day -- its
+    parameter is named `today` only because every other caller happens
+    to always pass today's date; bid_data_published() (what it uses to
+    decide which periods are safe to ask for) already works for any
+    date, not just today, so no new fetch logic was needed here.
+    """
+    d = start
+    while d <= end:
+        ingest_wind_curtailment(conn, d)
+        d += timedelta(days=1)
+
+
 def ingest_fuelinst(conn: sqlite3.Connection) -> None:
     """FUELINST generation-by-fuel-type for the Live Market Generation tab
     -- a trailing window, not date-scoped (see fuelinst.fetch_fuelinst()),
@@ -377,6 +401,26 @@ def ingest_imrp(conn: sqlite3.Connection) -> None:
         log_fetch(conn, IMRP_SERIES, date.today(), ok=True, note=note)
     except Exception as e:  # noqa: BLE001
         log_fetch(conn, IMRP_SERIES, date.today(), ok=False, note=str(e))
+
+
+def ingest_cfd_auction_outcomes(conn: sqlite3.Connection) -> None:
+    """LCCC's CfD Allocation Round results (see ingest/cfd_auctions.py) --
+    a single fetch-the-whole-table call, same shape as ingest_imrp(). Not
+    date-scoped and, unlike ingest_imrp(), deliberately NOT wired into
+    background_refresh.py's 5-minute loop: a new allocation round's
+    results are a rare, newsworthy event (roughly once or twice a year),
+    so polling this every 5 minutes forever would only waste requests,
+    not gain any real freshness. Instead this is exposed as its own CLI
+    command (`gbpw ingest-cfd-auctions`, see cli.py) -- a manual action
+    run when new results actually exist, same precedent as
+    `load-fuel-types`.
+    """
+    try:
+        rows, note = cfd_auctions.fetch_cfd_auction_outcomes()
+        upsert_cfd_auction_outcomes(conn, rows)
+        log_fetch(conn, CFD_AUCTIONS_SERIES, date.today(), ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, CFD_AUCTIONS_SERIES, date.today(), ok=False, note=str(e))
 
 
 def ingest_bmu_reference(conn: sqlite3.Connection) -> None:

@@ -231,3 +231,55 @@ def test_dual_series_today_empty_when_nothing_yet(tmp_path):
     conn = connect(tmp_path / "test.db")
     result = lmm.dual_series_today(conn, "imbalance", "imbalance_volume", date(2026, 9, 16))
     assert result == {"points": []}
+
+
+def _pt(sp, actual, forecast):
+    return {"sp": sp, "actual": actual, "forecast": forecast}
+
+
+def test_deviation_regions_empty_when_actual_tracks_schedule():
+    points = [_pt(1, 100.0, 98.0), _pt(2, 102.0, 100.0), _pt(3, 99.0, 101.0)]
+    assert lmm.deviation_regions(points) == []
+
+
+def test_deviation_regions_ignores_a_single_period_blip():
+    # Deviates enough to clear the threshold, but only for one period --
+    # below min_run, so not a sustained trend worth flagging.
+    points = [_pt(1, 100.0, 100.0), _pt(2, 200.0, 100.0), _pt(3, 100.0, 100.0)]
+    assert lmm.deviation_regions(points) == []
+
+
+def test_deviation_regions_reports_a_sustained_run_in_each_direction():
+    points = [
+        _pt(1, 500.0, 200.0), _pt(2, 520.0, 200.0),  # overperforming for 2 periods
+        _pt(3, 200.0, 200.0),                         # back to normal
+        _pt(4, 50.0, 300.0), _pt(5, 40.0, 300.0), _pt(6, 45.0, 300.0),  # underperforming for 3
+    ]
+
+    assert lmm.deviation_regions(points) == [
+        {"start_sp": 1, "end_sp": 2, "direction": "over", "avg_deviation_mw": 310.0},
+        {"start_sp": 4, "end_sp": 6, "direction": "under", "avg_deviation_mw": 255.0},
+    ]
+
+
+def test_deviation_regions_run_broken_by_a_missing_period():
+    points = [
+        _pt(1, 500.0, 200.0),
+        _pt(2, None, None),   # not yet published -- breaks the run rather than counting as zero deviation
+        _pt(3, 520.0, 200.0),
+    ]
+
+    assert lmm.deviation_regions(points) == []
+
+
+def test_deviation_regions_floor_mw_matters_near_zero_schedule():
+    # A pure percentage threshold would blow up near a zero schedule --
+    # a small 10 MW blip against nothing must not be flagged.
+    points = [_pt(1, 10.0, 0.0), _pt(2, 10.0, 0.0)]
+    assert lmm.deviation_regions(points) == []
+
+    # But a large enough gap against a zero schedule still clears the floor.
+    points = [_pt(1, 30.0, 0.0), _pt(2, 30.0, 0.0)]
+    assert lmm.deviation_regions(points) == [
+        {"start_sp": 1, "end_sp": 2, "direction": "over", "avg_deviation_mw": 30.0}
+    ]

@@ -7,7 +7,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from gbpw import ppa_metrics  # noqa: E402
-from gbpw.storage import NA_RUN, PriceRow, connect, upsert_prices  # noqa: E402
+from gbpw.storage import (  # noqa: E402
+    NA_RUN, CfdAuctionOutcomeRow, PriceRow, connect, upsert_cfd_auction_outcomes, upsert_prices,
+)
 
 D1 = date(2026, 1, 1)
 D2 = date(2026, 1, 2)
@@ -121,6 +123,60 @@ def test_capture_price_by_month_omits_months_with_no_generation(tmp_path):
     assert [r["month"] for r in rows] == ["2026-01"]
 
 
+def test_capture_rate_chart_data_empty_when_no_months():
+    assert ppa_metrics.capture_rate_chart_data([], []) == {"labels": [], "wind": [], "solar": []}
+
+
+def test_capture_rate_chart_data_fills_contiguous_months():
+    wind_by_month = [
+        {"month": "2026-01", "capture_rate_pct": 95.0},
+        {"month": "2026-03", "capture_rate_pct": 101.0},
+    ]
+    result = ppa_metrics.capture_rate_chart_data(wind_by_month, [])
+
+    # Feb is missing from the source rows entirely, but must still occupy
+    # its own slot in the contiguous month range -- a real gap, not
+    # compressed away.
+    assert result["labels"] == ["2026-01", "2026-02", "2026-03"]
+    assert result["wind"] == [95.0, None, 101.0]
+    assert result["solar"] == [None, None, None]
+
+
+def test_capture_rate_chart_data_wind_and_solar_independently_aligned():
+    wind_by_month = [{"month": "2026-01", "capture_rate_pct": 90.0}]
+    solar_by_month = [{"month": "2026-02", "capture_rate_pct": 80.0}]
+
+    result = ppa_metrics.capture_rate_chart_data(wind_by_month, solar_by_month)
+
+    assert result["labels"] == ["2026-01", "2026-02"]
+    assert result["wind"] == [90.0, None]
+    assert result["solar"] == [None, 80.0]
+
+
+def test_available_years_empty_when_no_imrp_data(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    assert ppa_metrics.available_years(conn) == []
+
+
+def test_available_years_spans_earliest_to_latest_imrp_year(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    upsert_prices(conn, [
+        PriceRow("imrp", date(2023, 11, 1), 1, NA_RUN, 50.0),
+        PriceRow("imrp", date(2026, 2, 1), 1, NA_RUN, 60.0),
+    ])
+    # contiguous, including years with no IMRP row at all in between (2024, 2025)
+    assert ppa_metrics.available_years(conn) == [2023, 2024, 2025, 2026]
+
+
+def test_available_years_single_year_when_all_data_in_one_year(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    upsert_prices(conn, [
+        PriceRow("imrp", date(2026, 1, 1), 1, NA_RUN, 50.0),
+        PriceRow("imrp", date(2026, 6, 1), 1, NA_RUN, 60.0),
+    ])
+    assert ppa_metrics.available_years(conn) == [2026]
+
+
 def test_curtailment_risk_none_when_nothing_ingested(tmp_path):
     conn = connect(tmp_path / "test.db")
     result = ppa_metrics.curtailment_risk(conn, D1, D2)
@@ -143,3 +199,65 @@ def test_curtailment_risk_computes_pct_of_potential_output(tmp_path):
     assert result["curtailed_mwh"] == 50.0  # 100 MW * 0.5h
     assert result["potential_mwh"] == 500.0
     assert result["curtailed_pct"] == 10.0
+
+
+def _cfd_row(**overrides):
+    base = dict(
+        lccc_id=1, auction="AR6", project_name="Test Solar Farm", developer="Test Developer",
+        technology_type="Solar PV (> 5MW)", capacity_mw=20.0, strike_price_gbp_mwh=50.0,
+        price_base_year=2012, delivery_year="2026", region="Scotland", publication_date="2024-09-03",
+    )
+    base.update(overrides)
+    return CfdAuctionOutcomeRow(**base)
+
+
+def test_cfd_category_matches_both_solar_spelling_variants():
+    assert ppa_metrics._cfd_category("Solar PV (> 5MW)") == "solar"
+    assert ppa_metrics._cfd_category("Solar Photo-Voltaic (>5MW)") == "solar"
+
+
+def test_cfd_category_matches_wind_variants_and_ignores_others():
+    assert ppa_metrics._cfd_category("Onshore Wind (> 5MW)") == "wind"
+    assert ppa_metrics._cfd_category("Offshore Wind") == "wind"
+    assert ppa_metrics._cfd_category("Floating Offshore Wind") == "wind"
+    assert ppa_metrics._cfd_category("Remote Island Wind (>5MW)") == "wind"
+    assert ppa_metrics._cfd_category("Dedicated Biomass with CHP") is None
+
+
+def test_cfd_benchmark_empty_when_nothing_ingested(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    assert ppa_metrics.cfd_benchmark(conn, "solar") == []
+
+
+def test_cfd_benchmark_capacity_weighted_average_per_round(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    upsert_cfd_auction_outcomes(conn, [
+        _cfd_row(lccc_id=1, auction="AR6", capacity_mw=10.0, strike_price_gbp_mwh=40.0),
+        _cfd_row(lccc_id=2, auction="AR6", capacity_mw=30.0, strike_price_gbp_mwh=60.0),
+        _cfd_row(lccc_id=3, auction="AR6", technology_type="Onshore Wind (> 5MW)"),  # different category
+    ])
+
+    result = ppa_metrics.cfd_benchmark(conn, "solar")
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["auction"] == "AR6"
+    assert r["project_count"] == 2
+    assert r["total_capacity_mw"] == 40.0
+    # (10*40 + 30*60) / 40 = 55.0
+    assert r["avg_strike_price_gbp_mwh"] == 55.0
+    assert r["price_base_year"] == 2012
+
+
+def test_cfd_benchmark_sorts_rounds_numerically_not_alphabetically(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    upsert_cfd_auction_outcomes(conn, [
+        _cfd_row(lccc_id=1, auction="AR10", price_base_year=2024),
+        _cfd_row(lccc_id=2, auction="AR2"),
+        _cfd_row(lccc_id=3, auction="AR1"),
+    ])
+
+    result = ppa_metrics.cfd_benchmark(conn, "solar")
+
+    # alphabetically "AR1" < "AR10" < "AR2" -- must not sort that way
+    assert [r["auction"] for r in result] == ["AR1", "AR2", "AR10"]

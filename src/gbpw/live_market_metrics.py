@@ -226,6 +226,68 @@ def actual_and_addon_vs_forecast(
     return {"points": points}
 
 
+def deviation_regions(
+    points: list[dict], floor_mw: float = 20.0, pct_threshold: float = 0.10, min_run: int = 2
+) -> list[dict]:
+    """Settlement-period runs where an interconnector's actual flow
+    sustained-deviates from its scheduled flow, for highlighting on the
+    Interconnectors tab's actual-vs-scheduled chart. Takes the same
+    `points` shape actual_vs_forecast() returns.
+
+    A real, scale-aware threshold, not "any nonzero gap": live flows
+    checked while designing this showed normal operational noise of its
+    own, scaling with the link's own flow (e.g. North Sea Link ~3-5% of
+    a 700-1000 MW schedule, IFA ~2-5% of a 200-600 MW schedule) -- a
+    naive "any difference" flag would fire on nearly every settlement
+    period for some links. `floor_mw` (default 20 MW) matters
+    specifically when scheduled flow is at or near zero -- a pure
+    percentage threshold blows up there (seen live: IFA scheduled=0,
+    actual=10 -- not a real deviation, just a small blip against nothing).
+    A run only counts once it holds for `min_run` (default 2, i.e. one
+    hour) consecutive periods in the same direction -- a single noisy
+    sample isn't a sustained trend worth flagging. Either side missing
+    (not yet published) breaks a run rather than being treated as zero
+    deviation.
+    """
+    def direction_and_diff(actual: float | None, scheduled: float | None) -> tuple[str | None, float | None]:
+        if actual is None or scheduled is None:
+            return None, None
+        diff = actual - scheduled
+        threshold = max(floor_mw, pct_threshold * abs(scheduled))
+        if abs(diff) <= threshold:
+            return None, None
+        return ("over" if diff > 0 else "under"), diff
+
+    regions: list[dict] = []
+    run: list[dict] = []
+
+    def flush() -> None:
+        if len(run) >= min_run:
+            avg_diff = sum(r["diff"] for r in run) / len(run)
+            regions.append({
+                "start_sp": run[0]["sp"],
+                "end_sp": run[-1]["sp"],
+                "direction": run[0]["direction"],
+                # The run's own average gap, not each point's individual one --
+                # a single headline figure for the label, and averaging (rather
+                # than peak) keeps a single outlier period from overstating the
+                # whole sustained run.
+                "avg_deviation_mw": round(abs(avg_diff), 1),
+            })
+        run.clear()
+
+    for p in points:
+        d, diff = direction_and_diff(p["actual"], p["forecast"])
+        if d is None:
+            flush()
+            continue
+        if run and run[-1]["direction"] != d:
+            flush()
+        run.append({"sp": p["sp"], "direction": d, "diff": diff})
+    flush()
+    return regions
+
+
 def dual_series_today(conn: sqlite3.Connection, series_a: str, series_b: str, today: date) -> dict:
     """Today's two progressions, paired by settlement period, for a chart
     with two independent y-axes (charts_live.dual_series_svg()) -- for two
