@@ -1,0 +1,24 @@
+# Local/single-host convenience wrapper around `docker build` + `docker run`
+# -- bind-mounts ./data and ./out from the host rather than named volumes,
+# so the same SQLite file you'd get from running this app directly (see
+# README) is what the container reads/writes, and it survives
+# `docker compose down`/image rebuilds without any extra steps.
+#
+# ANTHROPIC_API_KEY/ENTSOE_KEY here are read from the *shell environment*
+# or an optional .env file next to this one (Compose's own variable-
+# substitution mechanism) -- that .env is Compose's, not the app's; the
+# app itself still only ever reads plain process environment variables
+# (see README's "no .env mechanism in this project" note), Compose is
+# just what's putting them there in this setup.
+services:
+  gbpw:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+      - ./out:/app/out
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ENTSOE_KEY=${ENTSOE_KEY:-}
+    restart: unless-stopped
