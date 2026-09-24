@@ -191,5 +191,20 @@ internet without one.
 itself automatically (rather than running `gbpw run` by hand), add a cron
 job or systemd timer calling `gbpw run` on whatever cadence you want new
 weekly reports — `scripts/run_weekly.ps1` is the existing Windows/
-Task Scheduler equivalent of this, not currently ported to a Linux
-cron/timer.
+Task Scheduler equivalent of this. `gbpw run` only *builds* a report; it
+does not publish it (see `routes_gbpw.py`, which skips any report where
+`published=0`) — a scheduled job needs to call `gbpw publish
+--week-ending <date>` too, or the new report builds silently and never
+appears on the site.
+
+For the Docker deployment (`deploy/setup.sh`), `deploy/weekly-cron.sh`
+installs exactly this as a cron job — builds and publishes the
+just-completed week, every Monday at 06:00 UTC, run inside the app
+container:
+
+```bash
+bash deploy/weekly-cron.sh
+```
+
+Idempotent (re-running it replaces its own crontab entry rather than
+duplicating it). Logs to `~/gbpw-weekly.log`.
