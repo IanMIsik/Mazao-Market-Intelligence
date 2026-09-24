@@ -78,6 +78,23 @@ _WEB_NAV_CSS = """
   .webnav-pdfbtn { background:#16305A; color:#fff; border:1px solid #2B4B73; border-radius:4px;
     font:13px -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; padding:5px 10px; cursor:pointer; }
   .webnav-pdfbtn:hover { background:#2B4B73; }
+  /* Same overflow problem as base.html's .appnav (see app.css's own
+     comment on its mobile fix) -- confirmed live, brand + 5 nav links
+     + "Build report for another week" + a PDF button + a week-picker
+     select all crammed into one un-wrapping flex row overflows a phone
+     viewport even worse here, since there's more in this row than the
+     plain nav has. Same fix, duplicated rather than shared (this
+     stylesheet is inlined specifically to stay independent of app.css,
+     see the module docstring) -- stack brand above nav, drop the
+     decorative subtitle, let nav and the tools row each wrap. */
+  @media (max-width:600px) {
+    .webnav-appnav .webnav-wrap { flex-direction:column; align-items:flex-start; gap:0; padding:10px 16px; }
+    .webnav-appnav .webnav-brand { padding:4px 0; }
+    .webnav-appnav .webnav-brand span { display:none; }
+    .webnav-appnav nav { flex-wrap:wrap; gap:0 4px; width:100%; }
+    .webnav-appnav nav a { padding:8px 8px; font-size:12.5px; }
+    .webnav-tools { margin-left:0; width:100%; flex-wrap:wrap; gap:8px 14px; padding:8px 0 4px; }
+  }
 </style>
 """
 

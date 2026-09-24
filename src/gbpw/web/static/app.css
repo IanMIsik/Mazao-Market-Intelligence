@@ -166,6 +166,17 @@ svg { display:block; width:100%; height:auto; }
 
 table { border-collapse:collapse; width:100%; margin-top:14px;
   font-variant-numeric:tabular-nums; font-size:14px; }
+/* A table's natural width won't shrink below its own content's minimum
+   (standard table layout, not something width:100% overrides) -- on a
+   narrow phone viewport, PPA Tools' CfD benchmark tables (5 columns,
+   including "Avg strike price" values like "£103.77/MWh") genuinely
+   don't fit and bled off the edge of the page, confirmed live. Scoped
+   to `.table-scroll`-wrapped tables specifically (not every table site-
+   wide) -- only lets that content scroll horizontally within its own
+   card instead of overflowing the page; harmless at desktop widths
+   where no scrolling is needed (overflow-x:auto only engages when
+   content actually overflows). */
+.table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
 caption { text-align:left; color:var(--muted); font-size:13px; padding-bottom:8px; }
 th, td { padding:9px 10px; text-align:right; border-bottom:1px solid var(--rule-soft); }
 thead th { color:var(--navy); font-weight:600; font-size:12.5px; border-bottom:1px solid var(--navy); }
