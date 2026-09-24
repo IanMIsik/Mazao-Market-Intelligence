@@ -106,8 +106,11 @@ Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine
 <h2 style="margin-top:32px;">Wind and solar capture price against LCCC's day-ahead reference.</h2>
 <p class="byline">Capture rate shows how much of the average day-ahead price each technology actually
 earned over the selected window &mdash; below 100% means it tends to generate when the market price is
-already low. Uses LCCC's Intermittent Market Reference Price (IMRP), not the Elexon Market Index Data
-used elsewhere on this site &mdash; see the methodology note below for why.</p>
+already low. Uses the Low Carbon Contracts Company's (LCCC) Intermittent Market Reference Price (IMRP),
+not the Elexon Market Index Data used elsewhere on this site &mdash; see the methodology note below for
+why. Figures on this page are nominal (as actually settled at the time), unlike the Long-term price
+outlook above, which rebases IMRP into today's money &mdash; the same year's IMRP reading will genuinely
+read differently in the two places; see that card's own methodology note for why.</p>
 
 <div class="filters">
   <div class="row">
@@ -190,7 +193,12 @@ used elsewhere on this site &mdash; see the methodology note below for why.</p>
     received from both EPEX Spot and NordPool. Baseload price is the plain time-average IMRP price over
     the same window. This project's other pages (Live Market's Fundamentals tab) use a different series,
     Elexon's Market Index Data, for day-ahead price &mdash; that series is, in practice, a single-exchange
-    (APXMIDP) proxy, which is why this page uses IMRP instead. Wind curtailment is instructed-off volume
+    (APXMIDP) proxy, which is why this page uses IMRP instead. Both capture price and baseload here are
+    <strong>nominal</strong> &mdash; whatever IMRP actually settled at, at the time, with no adjustment for
+    inflation. The Long-term price outlook card above reads from this same IMRP series but rebases it into
+    today's money via HM Treasury's GDP deflator, so a past year's IMRP figure will read higher there than
+    the nominal figure this section would show for the same year &mdash; both are correct, on their own
+    stated basis, not a discrepancy. Wind curtailment is instructed-off volume
     via the Balancing Mechanism, already ingested for the Live Market Generation tab's "true wind
     outturn" figure.</p>
   </details>
