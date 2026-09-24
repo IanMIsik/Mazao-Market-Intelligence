@@ -104,7 +104,7 @@ Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine
   {% endif %}
 </div>
 
-<h2 style="margin-top:32px;">Wind and solar capture price against LCCC's day-ahead reference.</h2>
+<h2 id="capture-price" style="margin-top:32px;">Wind and solar capture price against LCCC's day-ahead reference.</h2>
 <p class="byline">Capture rate shows how much of the average day-ahead price each technology actually
 earned over the selected window &mdash; below 100% means it tends to generate when the market price is
 already low. Uses the Low Carbon Contracts Company's (LCCC) Intermittent Market Reference Price (IMRP),
@@ -118,7 +118,7 @@ read differently in the two places; see that card's own methodology note for why
     <div class="flabel">Window</div>
     <div class="range">
       {% for key, label in windows.items() %}
-      <a href="?window={{ key }}" class="{{ 'on' if window == key else '' }}">{{ label }}</a>
+      <a href="?window={{ key }}#capture-price" class="{{ 'on' if window == key else '' }}">{{ label }}</a>
       {% endfor %}
     </div>
   </div>
@@ -127,7 +127,7 @@ read differently in the two places; see that card's own methodology note for why
     <div class="flabel">Year</div>
     <div class="range">
       {% for y in years %}
-      <a href="?window={{ y }}" class="{{ 'on' if window == y|string else '' }}">{{ y }}</a>
+      <a href="?window={{ y }}#capture-price" class="{{ 'on' if window == y|string else '' }}">{{ y }}</a>
       {% endfor %}
     </div>
   </div>
