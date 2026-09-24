@@ -231,6 +231,25 @@ CREATE TABLE IF NOT EXISTS cfd_auction_outcomes (
 );
 CREATE INDEX IF NOT EXISTS idx_cfd_auction ON cfd_auction_outcomes(auction);
 CREATE INDEX IF NOT EXISTS idx_cfd_technology ON cfd_auction_outcomes(technology_type);
+
+CREATE TABLE IF NOT EXISTS desnz_price_scenarios (
+    vintage          TEXT NOT NULL,
+    scenario         TEXT NOT NULL,
+    year             INTEGER NOT NULL,
+    value_gbp_mwh    REAL NOT NULL,
+    price_base_year  INTEGER NOT NULL,
+    fetched_at       TEXT NOT NULL,
+    PRIMARY KEY (vintage, scenario, year)
+);
+
+CREATE TABLE IF NOT EXISTS gdp_deflator (
+    year         INTEGER NOT NULL,
+    vintage      TEXT NOT NULL,
+    deflator     REAL NOT NULL,
+    is_forecast  INTEGER NOT NULL,
+    fetched_at   TEXT NOT NULL,
+    PRIMARY KEY (year, vintage)
+);
 """
 
 
@@ -317,6 +336,23 @@ class CfdAuctionOutcomeRow:
     publication_date: str | None
 
 
+@dataclass(frozen=True)
+class DesnzPriceScenarioRow:
+    vintage: str
+    scenario: str
+    year: int
+    value_gbp_mwh: float
+    price_base_year: int
+
+
+@dataclass(frozen=True)
+class GdpDeflatorRow:
+    year: int
+    vintage: str
+    deflator: float
+    is_forecast: bool
+
+
 # Guards the WAL-mode switch + schema creation below, not regular
 # reads/writes. Those two are one-time setup per database file and
 # collided for real under concurrent first-time connect() calls (the
@@ -341,7 +377,22 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     # proceed without waiting on the writer, and the longer timeout covers
     # the brief windows where two writers really do collide, instead of
     # raising "database is locked".
-    conn = sqlite3.connect(db_path, timeout=30.0)
+    #
+    # check_same_thread=False: web/deps.py's per-request connection is a
+    # sync generator FastAPI dependency, which Starlette runs via anyio's
+    # worker threadpool -- confirmed live, the code *before* the yield
+    # (opening the connection) and the `finally` block *after* it (closing
+    # it) aren't guaranteed to land on the same pooled worker thread, so
+    # the default check_same_thread=True raised a real, reproducible
+    # "SQLite objects created in a thread can only be used in that same
+    # thread" 500 on `conn.close()`. Safe to disable here specifically:
+    # each connection is still only ever used by one request at a time
+    # (never shared/concurrent), and the WAL mode + busy_timeout above
+    # already make this module's actual concurrent-access story safe --
+    # this just stops SQLite's own overly strict same-thread bookkeeping
+    # from getting in the way of a connection's open and close legitimately
+    # happening on two different threads from the same threadpool.
+    conn = sqlite3.connect(db_path, timeout=30.0, check_same_thread=False)
     with _SETUP_LOCK:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
@@ -593,6 +644,48 @@ def upsert_cfd_auction_outcomes(
             delivery_year = excluded.delivery_year,
             region = excluded.region,
             publication_date = excluded.publication_date,
+            fetched_at = excluded.fetched_at
+        """,
+        data,
+    )
+    conn.commit()
+    return len(data)
+
+
+def upsert_desnz_price_scenarios(
+    conn: sqlite3.Connection, rows: Iterable[DesnzPriceScenarioRow], fetched_at: datetime | None = None
+) -> int:
+    fetched_at = fetched_at or datetime.now(timezone.utc)
+    ts = fetched_at.isoformat()
+    data = [(r.vintage, r.scenario, r.year, r.value_gbp_mwh, r.price_base_year, ts) for r in rows]
+    conn.executemany(
+        """
+        INSERT INTO desnz_price_scenarios (vintage, scenario, year, value_gbp_mwh, price_base_year, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (vintage, scenario, year) DO UPDATE SET
+            value_gbp_mwh = excluded.value_gbp_mwh,
+            price_base_year = excluded.price_base_year,
+            fetched_at = excluded.fetched_at
+        """,
+        data,
+    )
+    conn.commit()
+    return len(data)
+
+
+def upsert_gdp_deflator(
+    conn: sqlite3.Connection, rows: Iterable[GdpDeflatorRow], fetched_at: datetime | None = None
+) -> int:
+    fetched_at = fetched_at or datetime.now(timezone.utc)
+    ts = fetched_at.isoformat()
+    data = [(r.year, r.vintage, r.deflator, int(r.is_forecast), ts) for r in rows]
+    conn.executemany(
+        """
+        INSERT INTO gdp_deflator (year, vintage, deflator, is_forecast, fetched_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (year, vintage) DO UPDATE SET
+            deflator = excluded.deflator,
+            is_forecast = excluded.is_forecast,
             fetched_at = excluded.fetched_at
         """,
         data,

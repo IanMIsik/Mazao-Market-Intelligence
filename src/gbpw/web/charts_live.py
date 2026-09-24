@@ -18,7 +18,9 @@ adding a JS charting layer to a project that otherwise has none.
 
 from __future__ import annotations
 
+import json
 import math
+from datetime import date
 
 AXIS_LEFT = 38.0
 PLOT_W = 214.0
@@ -200,6 +202,117 @@ def progression_svg(points: list[dict], color: str, unit_label: str) -> str:
         f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1"/>',
         f'<circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="2.5" fill="{color}"/>',
         hits,
+        "</svg>",
+    ]
+    return "".join(parts)
+
+
+def multi_day_forecast_svg(points: list[dict], color: str, unit_label: str) -> str:
+    """A single line across a multi-day window (the Forecasts page's "all
+    14 days" view) -- points carry {date, sp, value}, chronologically
+    ordered, potentially spanning hundreds of settlement periods across
+    many calendar days, unlike every other chart in this module (all
+    scoped to one settlement day). x is a plain sequential index across
+    every point rather than a settlement-period value, since sp alone
+    repeats every day and can't place a point in time on its own; a
+    gridline + short date label marks each day's first point instead of
+    _axes()'s per-settlement-period ticks.
+
+    No per-point hover circles (every other chart here has them) -- at up
+    to 14 x 48 points across a ~214px plot, individual points sit closer
+    together than chart-hit's own hit-radius, so a hit-circle per point
+    would just always show whichever one happens to be on top, not
+    meaningfully "the point you're pointing at". Instead the full point
+    array + the exact axis bounds used here are embedded as data-*
+    attributes on the <svg> root; forecasts.html's own script finds the
+    *nearest* point to the cursor's x position (not a fixed hit-target)
+    and moves one shared crosshair/dot/tooltip to it -- one JS-driven
+    hover for the whole line instead of hundreds of static hit-circles.
+    axis_min/axis_max (the same _y_ticks()-rounded bounds the polyline
+    itself is drawn against, not the data's raw min/max) are included
+    specifically so that JS-computed dot lands exactly on the line, not
+    slightly off from using a different y-scale than the SVG was drawn
+    with.
+    """
+    if not points:
+        return ""
+    values = [p["value"] for p in points]
+    min_v, max_v = min(values), max(values)
+    y_ticks = _y_ticks(min_v, max_v)
+    axis_min, axis_max = y_ticks[0], y_ticks[-1]
+    v_span = (axis_max - axis_min) or 1.0
+
+    n = len(points)
+    span = (n - 1) or 1
+
+    def x(i: int) -> float:
+        return AXIS_LEFT + (i / span) * PLOT_W
+
+    def y(v: float) -> float:
+        return PLOT_TOP + PLOT_H - ((v - axis_min) / v_span) * PLOT_H
+
+    axis_parts = [f'<text class="ax sm unit" x="{AXIS_LEFT - 5:.1f}" y="{UNIT_LABEL_Y:.1f}" text-anchor="end">{unit_label}</text>']
+    for t in y_ticks:
+        gy = y(t)
+        line_class = "axline" if t == 0 and axis_min < 0 < axis_max else "grid"
+        axis_parts.append(f'<line class="{line_class}" x1="{AXIS_LEFT}" x2="{AXIS_LEFT + PLOT_W}" y1="{gy:.1f}" y2="{gy:.1f}"/>')
+        axis_parts.append(f'<text class="ax sm" x="{AXIS_LEFT - 5:.1f}" y="{gy + 3.5:.1f}" text-anchor="end">{_fmt(t)}</text>')
+
+    day_starts: list[tuple[int, str]] = []
+    last_date = None
+    for i, p in enumerate(points):
+        if p["date"] == last_date:
+            continue
+        last_date = p["date"]
+        day_starts.append((i, p["date"]))
+
+    # A gridline at every day boundary, but a text label only every Nth
+    # one -- up to 14 of them (one per day) crammed into a ~214px plot
+    # would overlap into an unreadable smear at any legible font size
+    # (same lesson as the imbalance-by-SP table earlier), so labels are
+    # thinned to a target count the same way _sp_ticks() already thins
+    # settlement-period ticks, while every gridline stays (thin, light --
+    # more of them costs nothing the way overlapping text does).
+    target_labels = 7
+    label_step = max(1, round(len(day_starts) / target_labels))
+    last_j = len(day_starts) - 1
+    last_shown_j = None
+    for j, (i, iso_date) in enumerate(day_starts):
+        sx = x(i)
+        axis_parts.append(f'<line class="grid" x1="{sx:.1f}" x2="{sx:.1f}" y1="{PLOT_TOP}" y2="{PLOT_TOP + PLOT_H}"/>')
+        # The final day always gets a label (so the window's own end is
+        # never ambiguous), but only if it isn't already about to collide
+        # with the label right before it -- otherwise skip the regular
+        # step's pick for one that's too close to the forced last one.
+        is_regular_step = j % label_step == 0
+        is_forced_last = j == last_j and (last_shown_j is None or j - last_shown_j >= label_step)
+        if not (is_regular_step or is_forced_last):
+            continue
+        last_shown_j = j
+        # "%-d" (no leading zero) isn't portable -- glibc supports it,
+        # Windows' CRT doesn't (confirmed: this app's own dev server runs
+        # on Windows). Build the label manually instead.
+        d = date.fromisoformat(iso_date)
+        label = f"{d.day} {d.strftime('%b')}"
+        axis_parts.append(f'<text class="ax sm" x="{sx:.1f}" y="{X_LABEL_Y:.1f}" text-anchor="middle">{label}</text>')
+
+    coords = [(x(i), y(p["value"])) for i, p in enumerate(points)]
+    poly = " ".join(f"{cx:.1f},{cy:.1f}" for cx, cy in coords)
+
+    # Single-quoted so the JSON's own double-quoted strings don't need
+    # escaping; HTML permits either quote style on an attribute.
+    point_data = json.dumps([{"date": p["date"], "sp": p["sp"], "value": p["value"]} for p in points])
+
+    parts = [
+        f'<svg class="chart-multiday" viewBox="0 0 {VIEW_W:.0f} {VIEW_H:.0f}" role="img" '
+        f'aria-label="14-day forecast, {unit_label}" preserveAspectRatio="xMidYMid meet" '
+        f"data-points='{point_data}' data-axis-left=\"{AXIS_LEFT}\" data-plot-w=\"{PLOT_W}\" "
+        f'data-plot-top="{PLOT_TOP}" data-plot-h="{PLOT_H}" data-axis-min="{axis_min}" '
+        f'data-axis-max="{axis_max}" data-unit="{unit_label}">',
+        *axis_parts,
+        f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1"/>',
+        f'<line class="chart-crosshair" x1="0" x2="0" y1="{PLOT_TOP}" y2="{PLOT_TOP + PLOT_H}" style="display:none;"/>',
+        f'<circle class="chart-crosshair-dot" r="3" fill="{color}" style="display:none;"/>',
         "</svg>",
     ]
     return "".join(parts)

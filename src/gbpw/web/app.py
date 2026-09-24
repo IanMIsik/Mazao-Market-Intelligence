@@ -16,7 +16,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..storage import DEFAULT_DB_PATH
-from . import routes_bess, routes_gbpw, routes_live, routes_ppa, routes_ppa_pricing
+from . import routes_bess, routes_forecasts, routes_gbpw, routes_live, routes_ppa, routes_ppa_pricing
 from .background_refresh import start_background_refresh
 from .deps import get_db, make_get_db
 
@@ -51,6 +51,7 @@ def create_app(db_path: Path = DEFAULT_DB_PATH) -> FastAPI:
     app.include_router(routes_gbpw.router)
     app.include_router(routes_bess.router)
     app.include_router(routes_live.router)
+    app.include_router(routes_forecasts.router)
     app.include_router(routes_ppa.router)
     app.include_router(routes_ppa_pricing.router)
     # BESS Analytics' own meta refresh (bess_analytics.html) only shows

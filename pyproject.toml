@@ -16,6 +16,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "entsoe-py>=0.6",
     "openpyxl>=3.1",
+    "odfpy>=1.4",
 ]
 
 [project.optional-dependencies]

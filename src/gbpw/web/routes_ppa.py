@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from .. import ppa_metrics
+from .. import desnz_metrics, ppa_metrics
 from .deps import get_db
 
 router = APIRouter()
@@ -81,6 +81,11 @@ def ppa_page(request: Request, window: str = DEFAULT_WINDOW, db: sqlite3.Connect
 
     chart_data = ppa_metrics.capture_rate_chart_data(wind_by_month, solar_by_month)
 
+    # Also window-independent (like the CfD benchmark above) -- a
+    # 14-year outturn history + a 2050-year scenario band isn't
+    # something the short-window picker above should filter.
+    long_term = desnz_metrics.long_term_outlook(db)
+
     context = {
         "request": request,
         "active_nav": "ppa",
@@ -95,5 +100,6 @@ def ppa_page(request: Request, window: str = DEFAULT_WINDOW, db: sqlite3.Connect
         "chart_data": chart_data,
         "cfd_wind": cfd_wind,
         "cfd_solar": cfd_solar,
+        "long_term": long_term,
     }
     return templates.TemplateResponse(request, "ppa_tools.html", context)

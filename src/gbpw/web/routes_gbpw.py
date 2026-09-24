@@ -67,10 +67,7 @@ _WEB_NAV_CSS = """
   .webnav-appnav nav a { display:block; padding:16px 14px; color:#B9C6DA; text-decoration:none; font-size:13.5px;
     border-bottom:2px solid transparent; }
   .webnav-appnav nav a.on { color:#fff; border-bottom-color:#B04A39; font-weight:600; }
-  .webnav-appnav nav a.soon { color:#5E7291; cursor:default; }
-  .webnav-appnav nav a.soon span { font-size:10.5px; margin-left:5px; border:1px solid #45577A; padding:1px 5px;
-    border-radius:8px; color:#8FA0BC; }
-  .webnav-appnav nav a:not(.soon):not(.on):hover { color:#fff; }
+  .webnav-appnav nav a:not(.on):hover { color:#fff; }
   .webnav-tools { margin-left:auto; display:flex; align-items:center; gap:14px; }
   .webnav-weekpick { display:flex; align-items:center; gap:8px; }
   .webnav-weekpick label { color:#8FA0BC; font-size:12px; }
@@ -110,7 +107,8 @@ def _week_nav_bar(weeks: list[dict], current: date) -> str:
       <a href="/gbpw" class="on">GB Power Weekly</a>
       <a href="/bess">BESS Analytics</a>
       <a href="/live">Live market</a>
-      <a class="soon">PPA tools<span>soon</span></a>
+      <a href="/forecasts">Forecasts</a>
+      <a href="/ppa">PPA tools</a>
     </nav>
     <div class="webnav-tools">
       <a class="webnav-newlink" href="/gbpw/new">+ Build report for another week</a>

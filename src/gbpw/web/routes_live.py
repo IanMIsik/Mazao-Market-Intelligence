@@ -44,7 +44,7 @@ from .. import live_market_metrics as lmm
 from .. import power_flow_metrics as pfm
 from ..ingest.elexon import INTERCONNECTORS
 from ..storage import latest_fetch_ts
-from . import charts_generation, charts_live
+from . import charts_generation, charts_live, http_cache
 from .deps import get_db
 
 router = APIRouter()
@@ -71,6 +71,16 @@ FUNDAMENTALS = [
 
 @router.get("/live", response_class=HTMLResponse)
 def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db)):
+    # Cheap freshness check before any of the real queries below -- a
+    # reload that lands between two background-refresh cycles (the
+    # common case for a tab left open) short-circuits into a 304 here
+    # instead of re-running everything just to rebuild identical HTML.
+    last_updated = latest_fetch_ts(db) or ""
+    etag = http_cache.etag_for(last_updated)
+    cached = http_cache.not_modified(request, etag)
+    if cached is not None:
+        return cached
+
     today = date.today()
     week_range = lmm.week_so_far(today)
     dates = list(_date_range(*week_range)) if week_range else []
@@ -172,8 +182,6 @@ def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db))
     import_tooltip = "\n".join(f"{leg['name']}: {leg['value'] / 1000:,.2f} GW" for leg in flow["import_legs"]) or "No imports yet today"
     export_tooltip = "\n".join(f"{leg['name']}: {leg['value'] / 1000:,.2f} GW" for leg in flow["export_legs"]) or "No exports yet today"
 
-    last_updated = latest_fetch_ts(db) or ""
-
     context = {
         "request": request,
         "active_nav": "live",
@@ -222,7 +230,9 @@ def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db))
         "pf_center_label": pf_center_label,
         "last_updated": last_updated,
     }
-    return templates.TemplateResponse(request, "live_market.html", context)
+    response = templates.TemplateResponse(request, "live_market.html", context)
+    http_cache.apply_cache_headers(response, etag)
+    return response
 
 
 @router.get("/live/status")

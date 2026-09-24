@@ -11,6 +11,8 @@ Command-line entry point tying ingest / narrative / render / publish together.
     gbpw serve      [--host 127.0.0.1] [--port 5000] [--reload]
     gbpw load-fuel-types --file BMUFuelType.xlsx
     gbpw ingest-cfd-auctions
+    gbpw ingest-desnz-prices
+    gbpw ingest-gdp-deflator
 
 `run` is the one-shot form meant for a scheduler: ingest the trailing window
 then build, writing to <out-dir>/gbpw-<week-ending>.html. `--week-ending auto`
@@ -41,6 +43,17 @@ Deliberately a manual command, not part of any automatic refresh cycle --
 a new round's results are a rare, newsworthy event (roughly once or
 twice a year), not something worth polling on a schedule. Run it again
 whenever a new round (e.g. AR8) is published.
+
+`ingest-desnz-prices` fetches DESNZ's Energy and Emissions Projections,
+Annex M wholesale electricity price scenarios (see ingest/desnz_eep.py)
+for the PPA Tools long-term price chart -- every known vintage in one
+call. Manual, not scheduled -- DESNZ publishes a new edition every
+several months to roughly a year. `ingest-gdp-deflator` fetches HM
+Treasury's GDP deflator (see ingest/gdp_deflator.py), used alongside it
+to rebase both that scenario data and LCCC's historical IMRP outturn
+onto one "today's money" basis. Also manual -- Treasury publishes a new
+release roughly quarterly, still rare enough not to poll. Both need to
+have been run at least once for the long-term price chart to render.
 """
 
 from __future__ import annotations
@@ -59,7 +72,9 @@ from .ingest import (
     ingest_bm_cashflows_range_parallel,
     ingest_bmu_reference,
     ingest_cfd_auction_outcomes,
+    ingest_desnz_price_scenarios,
     ingest_eac_range_parallel,
+    ingest_gdp_deflator,
     ingest_week_parallel,
 )
 from .metrics import IncompleteWeekError, build_week
@@ -189,6 +204,18 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_cfd.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
+    p_desnz = sub.add_parser(
+        "ingest-desnz-prices",
+        help="fetch and store DESNZ's Annex M wholesale electricity price scenarios (all known vintages) -- run when a new edition is published, not on a schedule",
+    )
+    p_desnz.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+
+    p_deflator = sub.add_parser(
+        "ingest-gdp-deflator",
+        help="fetch and store HM Treasury's GDP deflator, used to rebase the PPA Tools long-term price chart -- run when Treasury publishes a new release, not on a schedule",
+    )
+    p_deflator.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+
     p_run = sub.add_parser("run", help="ingest + build in one step, for a scheduler")
     p_run.add_argument("--week-ending", type=_week_ending_or_auto, default="auto")
     p_run.add_argument("--out-dir", type=Path, default=Path("out"))
@@ -198,7 +225,11 @@ def main(argv: list[str] | None = None) -> None:
 
     p_serve = sub.add_parser("serve", help="run the FastAPI dev server (uvicorn)")
     p_serve.add_argument("--host", default="127.0.0.1")
-    p_serve.add_argument("--port", type=int, default=5000)
+    # PORT env var takes precedence over the 5000 fallback, not the other
+    # way round -- lets a process launcher that assigns its own port (no
+    # --port flag passed) still be honored, while a plain `gbpw serve` with
+    # neither still works exactly as before.
+    p_serve.add_argument("--port", type=int, default=int(os.environ.get("PORT", 5000)))
     p_serve.add_argument("--reload", action="store_true", help="auto-reload on code changes (dev only)")
     p_serve.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
@@ -297,6 +328,31 @@ def main(argv: list[str] | None = None) -> None:
         count = conn.execute("SELECT COUNT(*) FROM cfd_auction_outcomes").fetchone()[0]
         rounds = conn.execute("SELECT DISTINCT auction FROM cfd_auction_outcomes ORDER BY auction").fetchall()
         print(f"Done. {count:,} project result(s) on file across {len(rounds)} round(s): {', '.join(r[0] for r in rounds)}")
+
+    elif args.command == "ingest-desnz-prices":
+        print("Fetching DESNZ's Annex M wholesale electricity price scenarios (all known vintages)...")
+        ingest_desnz_price_scenarios(conn)
+        last = conn.execute(
+            "SELECT ok, note FROM fetch_log WHERE series = 'desnz_price_scenarios' ORDER BY ts DESC LIMIT 1"
+        ).fetchone()
+        if last and not last[0]:
+            print(f"Failed: {last[1]}")
+            sys.exit(1)
+        count = conn.execute("SELECT COUNT(*) FROM desnz_price_scenarios").fetchone()[0]
+        vintages = conn.execute("SELECT DISTINCT vintage FROM desnz_price_scenarios ORDER BY vintage").fetchall()
+        print(f"Done. {count:,} row(s) on file across {len(vintages)} vintage(s): {', '.join(v[0] for v in vintages)}")
+
+    elif args.command == "ingest-gdp-deflator":
+        print("Fetching HM Treasury's GDP deflator...")
+        ingest_gdp_deflator(conn)
+        last = conn.execute(
+            "SELECT ok, note FROM fetch_log WHERE series = 'gdp_deflator' ORDER BY ts DESC LIMIT 1"
+        ).fetchone()
+        if last and not last[0]:
+            print(f"Failed: {last[1]}")
+            sys.exit(1)
+        count = conn.execute("SELECT COUNT(*) FROM gdp_deflator").fetchone()[0]
+        print(f"Done. {count:,} year(s) on file.")
 
     elif args.command == "status":
         healthy = _print_status(conn, args.week_ending, args.history_days)

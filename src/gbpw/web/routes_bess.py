@@ -17,7 +17,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import bm_metrics, eac_metrics
-from . import charts_bess
+from ..storage import latest_fetch_ts
+from . import charts_bess, http_cache
 from .deps import get_db
 
 router = APIRouter()
@@ -51,6 +52,16 @@ def _window_dates(db: sqlite3.Connection, window: int) -> tuple[date, date]:
 
 @router.get("/bess", response_class=HTMLResponse)
 def bess_page(request: Request, window: int = 7, auction_day: str = "today", db: sqlite3.Connection = Depends(get_db)):
+    # Cheap freshness check before any of the real queries below -- see
+    # http_cache.py. The ETag has to cover window/auction_day too, not
+    # just last_updated, since those change the rendered output on their
+    # own regardless of whether any new data has landed.
+    last_updated = latest_fetch_ts(db) or ""
+    etag = http_cache.etag_for(last_updated, window, auction_day)
+    cached = http_cache.not_modified(request, etag)
+    if cached is not None:
+        return cached
+
     start, end = _window_dates(db, window)
 
     summary = eac_metrics.market_summary(db, start, end)
@@ -115,7 +126,9 @@ def bess_page(request: Request, window: int = 7, auction_day: str = "today", db:
         "leaderboard_svg": charts_bess.leaderboard_bars_svg(activity["leaderboard"]),
         "service_type_colors": charts_bess.service_type_colors([r["service_type"] for r in summary["by_service_type"]]),
     }
-    return templates.TemplateResponse(request, "bess_analytics.html", context)
+    response = templates.TemplateResponse(request, "bess_analytics.html", context)
+    http_cache.apply_cache_headers(response, etag)
+    return response
 
 
 @router.get("/api/eac/participants/search")

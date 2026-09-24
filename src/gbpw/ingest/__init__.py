@@ -8,13 +8,17 @@ from pathlib import Path
 from . import (
     carbon_intensity,
     cfd_auctions,
+    desnz_eep,
     eac,
     elexon,
     elexon_bm,
     entsoe_flows,
     fuelinst,
+    gdp_deflator,
     lccc,
+    neso_demand_medium,
     neso_embedded,
+    neso_wind_medium,
     pvlive,
     semo_flows,
     wind_curtailment,
@@ -30,8 +34,10 @@ from ..storage import (
     upsert_carbon_intensity,
     upsert_carbon_intensity_factors,
     upsert_cfd_auction_outcomes,
+    upsert_desnz_price_scenarios,
     upsert_eac_results,
     upsert_fuelinst,
+    upsert_gdp_deflator,
     upsert_prices,
     wind_elexon_units,
 )
@@ -68,6 +74,8 @@ CARBON_INTENSITY_FACTORS_SERIES = "carbon_intensity_factors"
 
 IMRP_SERIES = "imrp"
 CFD_AUCTIONS_SERIES = "cfd_auction_outcomes"
+DESNZ_EEP_SERIES = "desnz_price_scenarios"
+GDP_DEFLATOR_SERIES = "gdp_deflator"
 
 
 def ingest_day(conn: sqlite3.Connection, d: date) -> None:
@@ -257,6 +265,54 @@ def ingest_embedded_forecasts(conn: sqlite3.Connection) -> None:
         log_fetch(conn, "solar_forecast", date.today(), ok=False, note=str(e))
 
 
+def ingest_forecast_medium_term(conn: sqlite3.Connection, today: date) -> None:
+    """Everything the Forecasts page's day-1..day-14 window needs beyond
+    what Live Market already keeps current: tomorrow's WINDFOR/NDF (a
+    real day-ahead forecast this project never asked for before, see
+    elexon.fetch_wind_forecast_tomorrow()/fetch_demand_forecast_tomorrow())
+    for day 1, NESO's two purpose-built medium-term wind/demand products
+    for days 2-14, and Elexon's own nuclear availability forecast for days
+    2-14 (see elexon.fetch_nuclear_forecast_medium()). Five fetches, five
+    independent try/excepts -- one series being stale shouldn't hide that
+    the others are fine. Solar's own day 0-14 window is already covered by
+    ingest_embedded_forecasts() above; nothing new needed for it here.
+    """
+    try:
+        rows, note = elexon.fetch_wind_forecast_tomorrow(today)
+        upsert_prices(conn, rows)
+        log_fetch(conn, "wind_forecast", today, ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "wind_forecast", today, ok=False, note=str(e))
+
+    try:
+        rows, note = elexon.fetch_demand_forecast_tomorrow(today)
+        upsert_prices(conn, rows)
+        log_fetch(conn, "demand_forecast", today, ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "demand_forecast", today, ok=False, note=str(e))
+
+    try:
+        rows, note = neso_wind_medium.fetch_wind_forecast_medium()
+        upsert_prices(conn, rows)
+        log_fetch(conn, "wind_forecast_14d", today, ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "wind_forecast_14d", today, ok=False, note=str(e))
+
+    try:
+        rows, note = neso_demand_medium.fetch_demand_forecast_medium()
+        upsert_prices(conn, rows)
+        log_fetch(conn, "demand_forecast_14d", today, ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "demand_forecast_14d", today, ok=False, note=str(e))
+
+    try:
+        rows, note = elexon.fetch_nuclear_forecast_medium(today)
+        upsert_prices(conn, rows)
+        log_fetch(conn, "nuclear_forecast_14d", today, ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, "nuclear_forecast_14d", today, ok=False, note=str(e))
+
+
 def ingest_interconnector_scheduled(conn: sqlite3.Connection, today: date) -> None:
     """Scheduled interconnector flows for `today` -- continental links via
     ENTSO-E, Irish links via SEMO. Deliberately not folded into
@@ -421,6 +477,38 @@ def ingest_cfd_auction_outcomes(conn: sqlite3.Connection) -> None:
         log_fetch(conn, CFD_AUCTIONS_SERIES, date.today(), ok=True, note=note)
     except Exception as e:  # noqa: BLE001
         log_fetch(conn, CFD_AUCTIONS_SERIES, date.today(), ok=False, note=str(e))
+
+
+def ingest_desnz_price_scenarios(conn: sqlite3.Connection) -> None:
+    """DESNZ's Energy and Emissions Projections, Annex M wholesale
+    electricity price scenarios (see ingest/desnz_eep.py) -- fetches
+    every known vintage in one call, same not-date-scoped,
+    not-background-refreshed shape as ingest_cfd_auction_outcomes(): a
+    new Annex M edition is a rare event (every several months to a
+    year), so this is a manual CLI action (`gbpw ingest-desnz-prices`),
+    not a 5-minute poll.
+    """
+    try:
+        rows, note = desnz_eep.fetch_all_known_vintages()
+        upsert_desnz_price_scenarios(conn, rows)
+        log_fetch(conn, DESNZ_EEP_SERIES, date.today(), ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, DESNZ_EEP_SERIES, date.today(), ok=False, note=str(e))
+
+
+def ingest_gdp_deflator(conn: sqlite3.Connection) -> None:
+    """HM Treasury's GDP deflator (see ingest/gdp_deflator.py), used to
+    rebase the PPA Tools long-term price chart onto one money basis.
+    Treasury publishes a new release roughly quarterly -- still rare
+    enough that this is a manual CLI action (`gbpw ingest-gdp-deflator`),
+    not part of background_refresh.py's 5-minute cycle.
+    """
+    try:
+        rows, note = gdp_deflator.fetch_latest()
+        upsert_gdp_deflator(conn, rows)
+        log_fetch(conn, GDP_DEFLATOR_SERIES, date.today(), ok=True, note=note)
+    except Exception as e:  # noqa: BLE001
+        log_fetch(conn, GDP_DEFLATOR_SERIES, date.today(), ok=False, note=str(e))
 
 
 def ingest_bmu_reference(conn: sqlite3.Connection) -> None:

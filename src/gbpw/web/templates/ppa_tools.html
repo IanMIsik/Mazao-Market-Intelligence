@@ -157,15 +157,50 @@ Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine
   {% endif %}
 </div>
 
+<div class="today-card">
+  <div class="today-card-head">
+    <h2>Long-term price outlook</h2>
+    <span class="section-note">LCCC's IMRP outturn history against DESNZ's own long-range scenarios, both in
+    {{ long_term.money_year }} money.</span>
+  </div>
+  {% if long_term.has_data %}
+  <canvas id="long-term-chart" height="90"></canvas>
+  <p class="section-note" style="margin-top:12px;">2026 so far averages roughly what the chart shows above
+  DESNZ's reference line &mdash; the department's own projection is a policy-conditioned central case, not a
+  probability, and the shaded band is the span between its low and high fossil-fuel-price scenarios, nothing
+  more.</p>
+  <details>
+    <summary>Methodology &amp; scope</summary>
+    <p class="section-note">Outturn is LCCC's Intermittent Market Reference Price (IMRP, see the capture-price
+    methodology above), annual mean. The reference line and low-to-high band are DESNZ's Energy and Emissions
+    Projections, Annex M, wholesale baseload electricity price &mdash; three of Annex M's six published
+    scenarios (<code>Reference</code>, <code>FFP_Low</code>, <code>FFP_High</code>; the other three vary GDP
+    growth rather than fossil-fuel prices and aren't drawn here), vintage {{ long_term.vintage }}
+    {% if long_term.other_vintages %}(an earlier vintage, {{ long_term.other_vintages|join(', ') }}, is also on
+    file but not shown){% endif %}. DESNZ publishes Annex M in {{ long_term.desnz_base_year }} prices; both that
+    series and IMRP's own nominal-at-the-time history are rebased here into
+    {{ long_term.money_year }}{% if long_term.money_year_clamped %} &mdash; the latest year HM Treasury's GDP
+    deflator (see below) has been ingested for, since the current calendar year runs ahead of it{% endif %}
+    money using <a href="https://www.gov.uk/government/collections/gdp-deflators-at-market-prices-and-money-gdp" target="_blank" rel="noopener">HM Treasury's GDP deflator</a> &mdash; the same series DESNZ itself uses to
+    state Annex M's own basis. Not on this chart: the ICE forward curve and any third-party analyst scenario,
+    both proprietary data this project has no access to.</p>
+  </details>
+  {% else %}
+  <div class="empty-state">No long-term price data ingested yet &mdash; run <code>gbpw ingest-desnz-prices</code>
+  and <code>gbpw ingest-gdp-deflator</code>.</div>
+  {% endif %}
+</div>
+
 {% endblock %}
 
 {% block extra_body %}
-{% if chart_data.labels %}
+{% if chart_data.labels or long_term.has_data %}
 <!-- Chart.js: the one CDN-loaded library in this otherwise plain-Jinja2 app -- see the module docstring
      in ppa_metrics.py's capture_rate_chart_data() for why a canvas-drawn chart replaced the hand-rolled
      inline SVG this page used to render. Pinned to a major version, not @latest, so this page doesn't
      silently change behaviour on some future Chart.js release. -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+{% if chart_data.labels %}
 <script>
 (function () {
   var canvas = document.getElementById('capture-rate-chart');
@@ -219,5 +254,71 @@ Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine
   });
 })();
 </script>
+{% endif %}
+{% if long_term.has_data %}
+<script>
+(function () {
+  var canvas = document.getElementById('long-term-chart');
+  if (!canvas) return;
+
+  var data = {{ long_term.chart_data | tojson }};
+  // Same resolved-hex-value reasoning as the capture-rate chart above --
+  // canvas can't read var(--...) custom properties.
+  var OUTTURN_COLOR = '#2F3A45';
+  var REFERENCE_COLOR = '#3E6F8E';
+  var BAND_COLOR = 'rgba(62, 111, 142, 0.15)';
+  var MUTED = '#6B7783';
+  var GRID = '#EAEEF3';
+
+  new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: data.labels,
+      datasets: [
+        {
+          label: 'Outturn (IMRP)', data: data.outturn, borderColor: OUTTURN_COLOR, backgroundColor: OUTTURN_COLOR,
+          spanGaps: false, tension: 0.1, pointRadius: 0, borderWidth: 2
+        },
+        {
+          label: 'DESNZ reference', data: data.reference, borderColor: REFERENCE_COLOR, backgroundColor: REFERENCE_COLOR,
+          spanGaps: false, tension: 0.1, pointRadius: 0, borderWidth: 2, borderDash: [6, 4]
+        },
+        {
+          // Upper boundary of the low-high band -- drawn with no visible line of its own (only the
+          // fill to the next dataset below), same standard Chart.js band-fill technique: two boundary
+          // datasets, fill:false on the top one and fill:'-1' (fill to the PREVIOUS dataset, i.e. this
+          // one) on the bottom one.
+          label: 'DESNZ high fuel price', data: data.ffp_high, borderColor: 'transparent', backgroundColor: BAND_COLOR,
+          spanGaps: false, pointRadius: 0, borderWidth: 0, fill: false
+        },
+        {
+          label: 'DESNZ low fuel price', data: data.ffp_low, borderColor: 'transparent', backgroundColor: BAND_COLOR,
+          spanGaps: false, pointRadius: 0, borderWidth: 0, fill: '-1'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'top', labels: { color: '#2F3A45' } },
+        tooltip: {
+          callbacks: {
+            label: function (ctx) {
+              var v = ctx.parsed.y;
+              return ctx.dataset.label + ': ' + (v === null ? 'no data' : '£' + v.toFixed(1) + '/MWh');
+            }
+          }
+        }
+      },
+      scales: {
+        y: { ticks: { color: MUTED, callback: function (v) { return '£' + v; } }, grid: { color: GRID } },
+        x: { ticks: { color: MUTED, maxRotation: 0, autoSkip: true, maxTicksLimit: 15 }, grid: { display: false } }
+      }
+    }
+  });
+})();
+</script>
+{% endif %}
 {% endif %}
 {% endblock %}

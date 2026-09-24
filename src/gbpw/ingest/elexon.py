@@ -35,7 +35,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import requests
 
-from ..settlement import sp_start_utc, utc_to_settlement
+from ..settlement import periods_in_date, sp_start_utc, utc_to_settlement
 from ..storage import NA_RUN, PriceRow
 
 BASE = "https://data.elexon.co.uk/bmrs/api/v1"
@@ -251,4 +251,99 @@ def fetch_demand_forecast(d: date) -> tuple[list[PriceRow], str]:
         for r in rows
     ]
     note = f"ok ({len(out)} rows)"
+    return out, note
+
+
+def fetch_wind_forecast_tomorrow(today: date) -> tuple[list[PriceRow], str]:
+    """Tomorrow's WINDFOR rows, published *today* -- the real "day-ahead"
+    forecast the dataset name implies. fetch_wind_forecast(d) can't be
+    reused for this: it bounds the publish window to d itself and keeps
+    only sd == d rows, which is right for "today's own intraday
+    republishes" but wrong here. Live-confirmed WINDFOR's publish window
+    for today already carries tomorrow's (and even day-after's)
+    settlementDate rows -- Elexon publishes this a couple of days ahead of
+    delivery, this project just never asked for it before. Stored under
+    the same "wind_forecast" series as fetch_wind_forecast() -- it's the
+    same forecast product, just a further-out settlement date -- so the
+    Forecasts page's day-1 view can read it with no new series to know
+    about.
+    """
+    tomorrow = today + timedelta(days=1)
+    start, end = _local_day_utc_bounds(today, pad_hours=1)
+    rows = _get(f"{BASE}/datasets/WINDFOR", {"publishDateTimeFrom": start, "publishDateTimeTo": end})
+    out: list[PriceRow] = []
+    for r in rows:
+        dt = datetime.strptime(r["startTime"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        sd, sp = utc_to_settlement(dt)
+        if sd != tomorrow:
+            continue
+        for covered_sp in (sp, sp + 1):
+            out.append(PriceRow(series="wind_forecast", sd=sd, sp=covered_sp, run=r["publishTime"], value=r["generation"]))
+    note = f"ok ({len(out)} rows)"
+    return out, note
+
+
+def fetch_demand_forecast_tomorrow(today: date) -> tuple[list[PriceRow], str]:
+    """Tomorrow's NDF rows, published today -- see
+    fetch_wind_forecast_tomorrow()'s docstring for why this can't reuse
+    fetch_demand_forecast(d) directly. Same NDF 1-day publish-window limit
+    applies, but that's `today`'s window here, not tomorrow's -- the
+    publish happened today, the settlement date it describes is tomorrow.
+    """
+    tomorrow = today + timedelta(days=1)
+    start, end = _local_day_utc_bounds(today, pad_hours=0)
+    rows = _get(f"{BASE}/datasets/NDF", {"publishDateTimeFrom": start, "publishDateTimeTo": end, "boundary": "N"})
+    rows = [r for r in rows if r["settlementDate"] == tomorrow.isoformat()]
+    out = [
+        PriceRow(series="demand_forecast", sd=tomorrow, sp=r["settlementPeriod"], run=r["publishTime"], value=r["demand"])
+        for r in rows
+    ]
+    note = f"ok ({len(out)} rows)"
+    return out, note
+
+
+def fetch_nuclear_forecast_medium(today: date) -> tuple[list[PriceRow], str]:
+    """NUCLEAR's own available capacity ("Output Usable" -- the Grid Code's
+    own term, not a settlement-period generation reading) from Elexon's
+    2-14-days-ahead daily generation availability forecast (FOU2T14D,
+    /forecast/availability/daily?fuelType=NUCLEAR). One HTTP call, today's
+    own publish window, surfaces the whole forward range -- unlike
+    WINDFOR/NDF this endpoint isn't windowed by settlement date at all.
+
+    Genuinely one value per *calendar day*, not per settlement period --
+    nuclear output barely varies intraday, so that's this dataset's own
+    real granularity, not a simplification made here. Live-confirmed it
+    starts at day+2 (13 rows, tomorrow is never included), matching NESO's
+    own "2-14 days ahead" framing for wind/demand -- day 1 genuinely isn't
+    covered by this dataset, and isn't backfilled from a separate
+    day-ahead product the way wind/demand's own day-1 gap is, since this
+    is exactly the 2-14-day dataset asked for, not a day-1-inclusive one.
+
+    Stored broadcast across every settlement period of its day (the same
+    value repeated periods_in_date(d) times, DST-aware) rather than under
+    a single sentinel period -- a deliberate choice, not a fabrication:
+    it lets this join against wind/demand/solar's own per-period rows
+    using the exact same (date, sp) key everywhere else in this project
+    already does (see forecasts_metrics.residual_demand()), instead of
+    every reader needing to special-case "this one series has no real
+    sp". nuclear_forecast_by_day() (forecasts_metrics.py) reads it back
+    out as one number per day for display.
+    """
+    start = sp_start_utc(today, 1)
+    end = start + timedelta(hours=24)
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    rows = _get(
+        f"{BASE}/forecast/availability/daily",
+        {"publishTimeFrom": start.strftime(fmt), "publishTimeTo": end.strftime(fmt), "fuelType": "NUCLEAR"},
+    )
+    out: list[PriceRow] = []
+    for r in rows:
+        sd = date.fromisoformat(r["forecastDate"][:10])
+        for sp in range(1, periods_in_date(sd) + 1):
+            out.append(PriceRow(series="nuclear_forecast_14d", sd=sd, sp=sp, run=r["publishTime"], value=float(r["outputUsable"])))
+    if out:
+        dates = sorted({r.sd for r in out})
+        note = f"ok ({len(dates)} day(s), {dates[0]}..{dates[-1]})"
+    else:
+        note = "ok (0 rows)"
     return out, note

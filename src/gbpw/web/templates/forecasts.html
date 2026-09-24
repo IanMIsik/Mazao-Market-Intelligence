@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}Forecasts | Mazao Consulting{% endblock %}
+
+{% block extra_head %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+
+<header>
+  <div class="brand2">FORECASTS</div>
+  <div class="stamp num">{{ today.strftime('%a %d %b %Y') }}</div>
+</header>
+
+<h1>Wind, demand and solar, the next 14 days.</h1>
+<p class="byline">
+  Day 1 is Elexon's own day-ahead forecast (WINDFOR/NDF, fetched a day ahead specifically for this page);
+  days 2&ndash;14 are NESO's medium-term wind and demand products. Day 1's demand falls back to NESO's
+  medium-term figure instead whenever Elexon's own isn't fully published yet for that day, switching back
+  the moment it is. Solar's own forecast already covers the whole window in one series. Residual demand is
+  demand minus wind minus nuclear &mdash; solar isn't subtracted here by design. This is the medium-term
+  outlook, not a substitute for Live Market's own day-ahead figures.
+</p>
+
+<input type="radio" name="lm-tab" id="lm-tab-forecasts" checked>
+<input type="radio" name="lm-tab" id="lm-tab-battery">
+<div class="lm-tabs">
+  <label for="lm-tab-forecasts">Forecasts</label>
+  <label for="lm-tab-battery">Battery Optimization</label>
+</div>
+
+<div class="lm-panel lm-panel-forecasts">
+
+  <div class="filters">
+    <div class="row">
+      <div class="flabel">Day</div>
+      <div class="range">
+        {% if all_available %}
+        <a href="?day=all" class="{{ 'on' if day == 'all' else '' }}">All 14 days</a>
+        {% endif %}
+        {% for d in days %}
+        <a href="?day={{ d.isoformat() }}" class="{{ 'on' if day == d.isoformat() else '' }}">{{ d.strftime('%a %d %b') }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% if not all_available %}
+    <div class="row">
+      <div class="flabel"></div>
+      <span class="section-note">"All 14 days" isn't offered right now &mdash; wind and/or solar don't have
+      a complete forecast for every day in the window yet.</span>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if day == 'all' %}
+  {% if nuclear_by_day %}
+  <div class="lm-card" style="margin-top:16px;">
+    <div class="lm-card-title">Nuclear availability</div>
+    <div class="lm-card-sub">MW, one figure per day (Elexon's own forecast granularity &mdash; nuclear
+    output barely varies intraday) &middot; days 2&ndash;14 only, this dataset doesn't reach day 1 &middot;
+    subtracted from residual demand below wherever it's available</div>
+    <table style="margin-top:8px;">
+      <tbody>
+        <tr>
+          <th scope="row">Day</th>
+          {% for n in nuclear_by_day %}<td>{{ n.date.strftime('%a %d %b') }}</td>{% endfor %}
+        </tr>
+        <tr>
+          <th scope="row">MW</th>
+          {% for n in nuclear_by_day %}<td>{{ n.value|commas(0) }}</td>{% endfor %}
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="lm-card" style="margin-top:16px;">
+    <div class="lm-card-title">Nuclear availability</div>
+    <div class="lm-card-sub">MW, {{ day }} &middot; Elexon's own forecast granularity is one figure for the
+    whole day (nuclear output barely varies intraday) &middot; subtracted from residual demand below when
+    available</div>
+    {% if nuclear_selected is not none %}
+    <div class="lm-kpi" style="padding:6px 0 0; background:none;">
+      <div class="v">{{ nuclear_selected|commas(0) }} <small>MW</small></div>
+    </div>
+    {% else %}
+    <div class="lm-empty">No nuclear forecast for {{ day }} &mdash; this dataset doesn't reach day 1.</div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="lm-panels" style="margin-top:16px;">
+    {% for c in charts %}
+    <div class="lm-card">
+      <div class="lm-card-title">{{ c.label }}</div>
+      <div class="lm-card-sub">{{ c.unit }}{% if day == 'all' %}, next 14 days{% else %}, {{ day }}{% endif %}</div>
+      {% if c.has_data %}
+      <div class="lm-stat-row">
+        Max <b>{{ c.stats.max|commas(0) }}</b>
+        {% if c.show_min %}&middot; Min <b>{{ c.stats.min|commas(0) }}</b>{% endif %}
+        &middot; Mean <b>{{ c.stats.mean|commas(0) }}</b> {{ c.unit }}
+      </div>
+      {{ c.svg | safe }}
+      {% else %}
+      <div class="lm-empty">No {{ c.label|lower }} forecast data for this selection yet.</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+</div>
+
+<div id="fc-tooltip" class="fc-tooltip"></div>
+
+<div class="lm-panel lm-panel-battery">
+  <div class="lm-card">
+    <div class="lm-card-title">Battery Optimization</div>
+    <div class="lm-empty">Not built yet. Day-ahead price forecasting via machine learning (Elexon +
+    National Gas SAP data), still being refined for accuracy. Coming soon.</div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_body %}
+<script>
+(function () {
+  // One shared crosshair/dot/tooltip driven from the cursor's nearest
+  // point, not a hit-circle per point -- see multi_day_forecast_svg()'s
+  // own docstring for why (up to 672 points across ~214px makes
+  // per-point hit-targets meaningless). Every chart-multiday svg on the
+  // page wires up the same way; the tooltip element itself is shared
+  // (one at a time is ever visible, since only one chart can be hovered).
+  var tooltip = document.getElementById('fc-tooltip');
+  if (!tooltip) return;
+
+  function formatDate(iso) {
+    var d = new Date(iso + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', {weekday: 'short', day: 'numeric', month: 'short'});
+  }
+
+  document.querySelectorAll('svg.chart-multiday').forEach(function (svg) {
+    var points = JSON.parse(svg.getAttribute('data-points'));
+    if (!points.length) return;
+    var axisLeft = parseFloat(svg.getAttribute('data-axis-left'));
+    var plotW = parseFloat(svg.getAttribute('data-plot-w'));
+    var plotTop = parseFloat(svg.getAttribute('data-plot-top'));
+    var plotH = parseFloat(svg.getAttribute('data-plot-h'));
+    // The exact same rounded axis bounds the server drew the polyline
+    // against (not the data's own raw min/max) -- using a different
+    // y-scale here would land the dot visibly off the line.
+    var axisMin = parseFloat(svg.getAttribute('data-axis-min'));
+    var axisMax = parseFloat(svg.getAttribute('data-axis-max'));
+    var vSpan = (axisMax - axisMin) || 1;
+    var unit = svg.getAttribute('data-unit');
+    var crosshair = svg.querySelector('.chart-crosshair');
+    var dot = svg.querySelector('.chart-crosshair-dot');
+    var lastIdx = null;
+
+    function render(clientX, clientY) {
+      var rect = svg.getBoundingClientRect();
+      var viewBox = svg.viewBox.baseVal;
+      var svgX = (clientX - rect.left) / rect.width * viewBox.width;
+      var frac = (svgX - axisLeft) / plotW;
+      var idx = Math.round(frac * (points.length - 1));
+      idx = Math.max(0, Math.min(points.length - 1, idx));
+      if (idx === lastIdx) return;  // skip redundant work while the mouse sits over the same point
+      lastIdx = idx;
+
+      var p = points[idx];
+      var x = axisLeft + (idx / (points.length - 1)) * plotW;
+      var y = plotTop + plotH - ((p.value - axisMin) / vSpan) * plotH;
+      crosshair.setAttribute('x1', x); crosshair.setAttribute('x2', x);
+      crosshair.style.display = '';
+      dot.setAttribute('cx', x); dot.setAttribute('cy', y);
+      dot.style.display = '';
+
+      var screenX = rect.left + (x / viewBox.width) * rect.width;
+      var screenY = rect.top + (y / viewBox.height) * rect.height;
+      tooltip.textContent = formatDate(p.date) + ' SP' + p.sp + ': ' + p.value.toLocaleString('en-GB') + ' ' + unit;
+      tooltip.style.left = (screenX + 12) + 'px';
+      tooltip.style.top = (screenY - 12) + 'px';
+      tooltip.style.display = 'block';
+    }
+
+    svg.addEventListener('mousemove', function (e) { render(e.clientX, e.clientY); });
+    svg.addEventListener('mouseleave', function () {
+      lastIdx = null;
+      crosshair.style.display = 'none';
+      dot.style.display = 'none';
+      tooltip.style.display = 'none';
+    });
+  });
+})();
+</script>
+{% endblock %}

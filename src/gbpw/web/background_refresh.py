@@ -17,9 +17,11 @@ whole report's history.
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from datetime import date, timedelta
 from pathlib import Path
+from typing import IO
 
 from ..ingest import (
     ingest_bm_cashflows_range_parallel,
@@ -27,6 +29,7 @@ from ..ingest import (
     ingest_carbon_intensity,
     ingest_eac_range_parallel,
     ingest_embedded_forecasts,
+    ingest_forecast_medium_term,
     ingest_fuelinst,
     ingest_imrp,
     ingest_interconnector_scheduled,
@@ -98,12 +101,54 @@ def _refresh_once(db_path: Path) -> None:
         # still just a handful of paginated requests and every write is
         # an idempotent upsert.
         ingest_imrp(conn)
+        # Forecasts page (day 1..14 view, not shown on Live Market itself)
+        # -- see ingest_forecast_medium_term()'s own docstring for why this
+        # is four separate fetches, not folded into the block above.
+        ingest_forecast_medium_term(conn, today)
     finally:
         conn.close()
     logger.info(
         "background refresh: re-ingested embedded forecasts + scheduled interconnector flows + "
-        "wind curtailment + fuelinst + carbon intensity + IMRP for %s", today,
+        "wind curtailment + fuelinst + carbon intensity + IMRP + medium-term forecasts for %s", today,
     )
+
+
+# Kept alive for the process's whole lifetime -- closing or garbage-
+# collecting the handle releases the OS lock it holds (see
+# _try_acquire_singleton_lock()). Only ever meaningfully non-None in one
+# process at a time even when several share the same db_path.
+_lock_handle: IO[bytes] | None = None
+
+
+def _try_acquire_singleton_lock(lock_path: Path) -> IO[bytes] | None:
+    """An OS-level advisory lock, not a marker *file* whose mere presence
+    means "locked" -- the OS releases it automatically the instant the
+    holding process exits, crashes, or is killed, so there's never a
+    stale lock left behind after an unclean shutdown. That matters here:
+    this app is restarted via `docker restart`/systemd, not a lock-aware
+    orchestrator that would clean up a leftover marker file itself, and a
+    permanently-stuck stale lock would silently stop the refresh loop
+    from ever running again in any process.
+
+    Returns the open file handle (caller must keep a reference to it for
+    as long as the lock should be held) if this process won the lock, or
+    None if another process already holds it.
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "wb")
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return None
+    return fh
 
 
 def start_background_refresh(db_path: Path, interval_seconds: int = DEFAULT_INTERVAL_SECONDS) -> threading.Event:
@@ -124,8 +169,22 @@ def start_background_refresh(db_path: Path, interval_seconds: int = DEFAULT_INTE
     usage pattern. Returns the stop Event so callers (tests, graceful
     shutdown) can end the loop early; daemon=True already means it won't
     block process exit on its own.
+
+    Guarded by an OS-level advisory lock (data/.refresh.lock, next to the
+    database) so only one process actually runs this loop when several
+    processes share the same db_path -- e.g. `gbpw serve --workers N`, or
+    simply starting the server twice by accident against the same file.
+    Without this, every such process would run its own copy of the loop:
+    N times the Elexon/NESO/ENTSO-E traffic for no benefit, all racing to
+    upsert the same rows. A process that loses the race still returns a
+    real, already-unused Event, so callers don't need two code paths.
     """
+    global _lock_handle
+    _lock_handle = _try_acquire_singleton_lock(db_path.parent / ".refresh.lock")
     stop = threading.Event()
+    if _lock_handle is None:
+        logger.info("background refresh already owned by another process for %s -- skipping in this one", db_path)
+        return stop
 
     def _loop() -> None:
         while True:
