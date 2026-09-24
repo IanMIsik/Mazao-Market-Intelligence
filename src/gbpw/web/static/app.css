@@ -300,6 +300,17 @@ body.live input[name="lm-tab"] { position:absolute; opacity:0; pointer-events:no
 body.live .lm-tabs { display:flex; gap:2px; margin:22px 0 0; border-bottom:1px solid var(--lm-border); }
 body.live .lm-tabs label { font-family:var(--lm-mono); font-size:12px; letter-spacing:.04em; text-transform:uppercase;
   color:var(--lm-dim); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; user-select:none; }
+/* Live Market's 3 tabs (Fundamentals/Interconnectors/Generation) and
+   Forecasts' 2 (Forecasts/Battery Optimization, longer word) only just
+   clear a 375px phone width at the padding/font above -- fine there,
+   but with no margin for a narrower phone (320px) or a longer future
+   tab label. flex-wrap is the safety net (labels drop to a second row
+   rather than clipping/forcing horizontal scroll if they ever don't
+   fit), tightened padding/font buys back room before that's needed. */
+@media (max-width:600px) {
+  body.live .lm-tabs { flex-wrap:wrap; }
+  body.live .lm-tabs label { padding:8px 10px; font-size:11px; }
+}
 body.live .lm-tabs label:hover { color:var(--lm-text); }
 body.live #lm-tab-fundamentals:checked ~ .lm-tabs label[for="lm-tab-fundamentals"],
 body.live #lm-tab-interconnectors:checked ~ .lm-tabs label[for="lm-tab-interconnectors"],
