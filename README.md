@@ -151,6 +151,16 @@ Put a reverse proxy (nginx, Caddy, etc. — either on the host or as a
 second Compose service) in front of it for TLS; don't expose the
 container's port directly to the internet.
 
+`deploy/setup.sh` automates this whole option end to end on a fresh
+Ubuntu host (24.04/26.04 LTS, full or Minimal) — installs Docker,
+clones/updates the repo, brings the app up via `docker-compose.yml`,
+and configures the Nginx reverse proxy above. Idempotent, so re-running
+it after a `git pull` rebuilds and restarts cleanly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/IanMIsik/Mazao-Market-Intelligence/master/deploy/setup.sh | bash
+```
+
 ### Option B: systemd, no container
 
 Example unit (`/etc/systemd/system/gbpw.service`):
