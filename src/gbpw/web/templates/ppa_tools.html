@@ -8,12 +8,106 @@
   <div class="stamp num">{{ start.strftime('%d %b %Y') }} &ndash; {{ end.strftime('%d %b %Y') }}</div>
 </header>
 
-<h1>Wind and solar capture price against LCCC's day-ahead reference.</h1>
+<h1>LCCC's price history against DESNZ's long-term scenarios, in {{ long_term.money_year }} money.</h1>
+<p class="byline">Three reference points for negotiating a PPA, longest horizon first: DESNZ's long-range
+price scenarios against LCCC's own outturn history, the CfD Allocation Round strike-price register, and
+wind/solar's historical capture rate against LCCC's day-ahead reference.
+Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine</a>.</p>
+
+<div class="today-card">
+  <div class="today-card-head">
+    <h2>Long-term price outlook</h2>
+    <span class="section-note">LCCC's IMRP outturn history against DESNZ's own long-range scenarios, both in
+    {{ long_term.money_year }} money.</span>
+  </div>
+  {% if long_term.has_data %}
+  <div class="chart-canvas-wrap"><canvas id="long-term-chart"></canvas></div>
+  <p class="section-note" style="margin-top:12px;">2026 so far averages roughly what the chart shows above
+  DESNZ's reference line &mdash; the department's own projection is a policy-conditioned central case, not a
+  probability, and the shaded band is the span between its low and high fossil-fuel-price scenarios, nothing
+  more.</p>
+  <details>
+    <summary>Methodology &amp; scope</summary>
+    <p class="section-note">Outturn is LCCC's Intermittent Market Reference Price (IMRP, see the capture-price
+    methodology below), annual mean. The reference line and low-to-high band are DESNZ's Energy and Emissions
+    Projections, Annex M, wholesale baseload electricity price &mdash; three of Annex M's six published
+    scenarios (<code>Reference</code>, <code>FFP_Low</code>, <code>FFP_High</code>; the other three vary GDP
+    growth rather than fossil-fuel prices and aren't drawn here), vintage {{ long_term.vintage }}
+    {% if long_term.other_vintages %}(an earlier vintage, {{ long_term.other_vintages|join(', ') }}, is also on
+    file but not shown){% endif %}. DESNZ publishes Annex M in {{ long_term.desnz_base_year }} prices; both that
+    series and IMRP's own nominal-at-the-time history are rebased here into
+    {{ long_term.money_year }}{% if long_term.money_year_clamped %} &mdash; the latest year HM Treasury's GDP
+    deflator (see below) has been ingested for, since the current calendar year runs ahead of it{% endif %}
+    money using <a href="https://www.gov.uk/government/collections/gdp-deflators-at-market-prices-and-money-gdp" target="_blank" rel="noopener">HM Treasury's GDP deflator</a> &mdash; the same series DESNZ itself uses to
+    state Annex M's own basis. Not on this chart: the ICE forward curve and any third-party analyst scenario,
+    both proprietary data this project has no access to.</p>
+  </details>
+  {% else %}
+  <div class="empty-state">No long-term price data ingested yet &mdash; run <code>gbpw ingest-desnz-prices</code>
+  and <code>gbpw ingest-gdp-deflator</code>.</div>
+  {% endif %}
+</div>
+
+<div class="today-card">
+  <div class="today-card-head">
+    <h2>CfD Allocation Round benchmark</h2>
+    <span class="section-note">Government-backed clearing prices, AR1&ndash;AR7 &mdash; a different kind of
+    reference point from the market-price figures below.</span>
+  </div>
+  {% if cfd_wind or cfd_solar %}
+  <div class="chart-grid">
+    <div>
+      <table>
+        <caption>Wind</caption>
+        <thead><tr><th>Round</th><th>Base year</th><th>Projects</th><th>Capacity (MW)</th><th>Avg strike price</th></tr></thead>
+        <tbody>
+          {% for r in cfd_wind %}
+          <tr>
+            <th scope="row">{{ r.auction }}</th>
+            <td>{{ r.price_base_year }}</td>
+            <td>{{ r.project_count }}</td>
+            <td>{{ r.total_capacity_mw|commas(0) }}</td>
+            <td>£{{ r.avg_strike_price_gbp_mwh|commas(2) }}/MWh</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <table>
+        <caption>Solar</caption>
+        <thead><tr><th>Round</th><th>Base year</th><th>Projects</th><th>Capacity (MW)</th><th>Avg strike price</th></tr></thead>
+        <tbody>
+          {% for r in cfd_solar %}
+          <tr>
+            <th scope="row">{{ r.auction }}</th>
+            <td>{{ r.price_base_year }}</td>
+            <td>{{ r.project_count }}</td>
+            <td>{{ r.total_capacity_mw|commas(0) }}</td>
+            <td>£{{ r.avg_strike_price_gbp_mwh|commas(2) }}/MWh</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <p class="section-note" style="margin-top:12px;">Capacity-weighted average strike price per round, from LCCC's
+  own published Allocation Round results. <strong>Rounds are not on a common price basis</strong> &mdash;
+  AR1&ndash;AR6 are quoted in 2012 real prices, AR7 in 2024 real prices (confirmed against government CfD policy
+  documents; AR6 figures need inflating by roughly 39% just to sit on AR7's own basis). These figures are
+  <strong>not</strong> converted to a common basis or to nominal terms here, and are not directly comparable to
+  the capture price/IMRP figures below without adjusting for that yourself. AR8 bidding closed in August 2026;
+  results aren't published yet.</p>
+  {% else %}
+  <div class="empty-state">No CfD Allocation Round data ingested yet &mdash; run <code>gbpw ingest-cfd-auctions</code>.</div>
+  {% endif %}
+</div>
+
+<h2 style="margin-top:32px;">Wind and solar capture price against LCCC's day-ahead reference.</h2>
 <p class="byline">Capture rate shows how much of the average day-ahead price each technology actually
 earned over the selected window &mdash; below 100% means it tends to generate when the market price is
 already low. Uses LCCC's Intermittent Market Reference Price (IMRP), not the Elexon Market Index Data
-used elsewhere on this site &mdash; see the methodology note below for why.
-Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine</a>.</p>
+used elsewhere on this site &mdash; see the methodology note below for why.</p>
 
 <div class="filters">
   <div class="row">
@@ -65,7 +159,7 @@ Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine
     technology tended to generate when the market price was already low.</span>
   </div>
   {% if chart_data.labels %}
-  <canvas id="capture-rate-chart" height="90"></canvas>
+  <div class="chart-canvas-wrap"><canvas id="capture-rate-chart"></canvas></div>
   {% else %}
   <div class="empty-state">No generation/price data ingested yet for this window.</div>
   {% endif %}
@@ -100,95 +194,6 @@ Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine
     via the Balancing Mechanism, already ingested for the Live Market Generation tab's "true wind
     outturn" figure.</p>
   </details>
-</div>
-
-<div class="today-card">
-  <div class="today-card-head">
-    <h2>CfD Allocation Round benchmark</h2>
-    <span class="section-note">Government-backed clearing prices, AR1&ndash;AR7 &mdash; a different kind of
-    reference point from the market-price figures above.</span>
-  </div>
-  {% if cfd_wind or cfd_solar %}
-  <div class="chart-grid">
-    <div>
-      <table>
-        <caption>Wind</caption>
-        <thead><tr><th>Round</th><th>Base year</th><th>Projects</th><th>Capacity (MW)</th><th>Avg strike price</th></tr></thead>
-        <tbody>
-          {% for r in cfd_wind %}
-          <tr>
-            <th scope="row">{{ r.auction }}</th>
-            <td>{{ r.price_base_year }}</td>
-            <td>{{ r.project_count }}</td>
-            <td>{{ r.total_capacity_mw|commas(0) }}</td>
-            <td>£{{ r.avg_strike_price_gbp_mwh|commas(2) }}/MWh</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <div>
-      <table>
-        <caption>Solar</caption>
-        <thead><tr><th>Round</th><th>Base year</th><th>Projects</th><th>Capacity (MW)</th><th>Avg strike price</th></tr></thead>
-        <tbody>
-          {% for r in cfd_solar %}
-          <tr>
-            <th scope="row">{{ r.auction }}</th>
-            <td>{{ r.price_base_year }}</td>
-            <td>{{ r.project_count }}</td>
-            <td>{{ r.total_capacity_mw|commas(0) }}</td>
-            <td>£{{ r.avg_strike_price_gbp_mwh|commas(2) }}/MWh</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <p class="section-note" style="margin-top:12px;">Capacity-weighted average strike price per round, from LCCC's
-  own published Allocation Round results. <strong>Rounds are not on a common price basis</strong> &mdash;
-  AR1&ndash;AR6 are quoted in 2012 real prices, AR7 in 2024 real prices (confirmed against government CfD policy
-  documents; AR6 figures need inflating by roughly 39% just to sit on AR7's own basis). These figures are
-  <strong>not</strong> converted to a common basis or to nominal terms here, and are not directly comparable to
-  the capture price/IMRP figures above without adjusting for that yourself. AR8 bidding closed in August 2026;
-  results aren't published yet.</p>
-  {% else %}
-  <div class="empty-state">No CfD Allocation Round data ingested yet &mdash; run <code>gbpw ingest-cfd-auctions</code>.</div>
-  {% endif %}
-</div>
-
-<div class="today-card">
-  <div class="today-card-head">
-    <h2>Long-term price outlook</h2>
-    <span class="section-note">LCCC's IMRP outturn history against DESNZ's own long-range scenarios, both in
-    {{ long_term.money_year }} money.</span>
-  </div>
-  {% if long_term.has_data %}
-  <canvas id="long-term-chart" height="90"></canvas>
-  <p class="section-note" style="margin-top:12px;">2026 so far averages roughly what the chart shows above
-  DESNZ's reference line &mdash; the department's own projection is a policy-conditioned central case, not a
-  probability, and the shaded band is the span between its low and high fossil-fuel-price scenarios, nothing
-  more.</p>
-  <details>
-    <summary>Methodology &amp; scope</summary>
-    <p class="section-note">Outturn is LCCC's Intermittent Market Reference Price (IMRP, see the capture-price
-    methodology above), annual mean. The reference line and low-to-high band are DESNZ's Energy and Emissions
-    Projections, Annex M, wholesale baseload electricity price &mdash; three of Annex M's six published
-    scenarios (<code>Reference</code>, <code>FFP_Low</code>, <code>FFP_High</code>; the other three vary GDP
-    growth rather than fossil-fuel prices and aren't drawn here), vintage {{ long_term.vintage }}
-    {% if long_term.other_vintages %}(an earlier vintage, {{ long_term.other_vintages|join(', ') }}, is also on
-    file but not shown){% endif %}. DESNZ publishes Annex M in {{ long_term.desnz_base_year }} prices; both that
-    series and IMRP's own nominal-at-the-time history are rebased here into
-    {{ long_term.money_year }}{% if long_term.money_year_clamped %} &mdash; the latest year HM Treasury's GDP
-    deflator (see below) has been ingested for, since the current calendar year runs ahead of it{% endif %}
-    money using <a href="https://www.gov.uk/government/collections/gdp-deflators-at-market-prices-and-money-gdp" target="_blank" rel="noopener">HM Treasury's GDP deflator</a> &mdash; the same series DESNZ itself uses to
-    state Annex M's own basis. Not on this chart: the ICE forward curve and any third-party analyst scenario,
-    both proprietary data this project has no access to.</p>
-  </details>
-  {% else %}
-  <div class="empty-state">No long-term price data ingested yet &mdash; run <code>gbpw ingest-desnz-prices</code>
-  and <code>gbpw ingest-gdp-deflator</code>.</div>
-  {% endif %}
 </div>
 
 {% endblock %}
@@ -232,6 +237,11 @@ Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine
     },
     options: {
       responsive: true,
+      // false, not the default -- see app.css's own comment on
+      // `.today-card canvas` for why a locked aspect ratio makes this
+      // chart unreadably short on a narrow phone viewport. The CSS
+      // height there is what actually controls the chart's height now.
+      maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { position: 'top', labels: { color: '#2F3A45' } },
@@ -299,6 +309,9 @@ Pricing a new project instead? See the <a href="/ppa/pricing">PPA Pricing Engine
     },
     options: {
       responsive: true,
+      // Same reasoning as the capture-rate chart above -- see app.css's
+      // `.today-card canvas` comment.
+      maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { position: 'top', labels: { color: '#2F3A45' } },

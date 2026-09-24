@@ -64,6 +64,32 @@ h1 { font-family:var(--serif); font-weight:400; color:var(--navy);
 .chart-grid .cg-label, .cg-label { font-size:12.5px; font-weight:600; margin-bottom:6px; }
 @media (max-width:640px) { .chart-grid { grid-template-columns:1fr; } }
 
+/* Chart.js canvases (PPA Tools' capture-rate-chart and long-term-chart)
+   -- with no explicit height and Chart.js's default maintainAspectRatio,
+   the canvas's height is locked to width/2, so on a narrow phone
+   viewport where the width has already shrunk to ~300px, the chart
+   itself renders barely 150px tall while still carrying the same
+   legend, axis labels and (on long-term-chart) 50 years of x-axis
+   ticks as the desktop version -- confirmed live, genuinely
+   unreadable, not just "smaller".
+
+   maintainAspectRatio:false (set in both charts' own JS options, see
+   ppa_tools.html) decouples height from width, but Chart.js's own docs
+   are explicit that the height then MUST come from a wrapper element,
+   never from styling the canvas itself: Chart.js's resize observer
+   measures the canvas's *parent* box to decide the canvas's size, so a
+   height rule on the canvas directly creates a circular dependency --
+   the parent's height ends up depending on its own child's rendered
+   size. Confirmed live: with height set on `canvas` directly, the
+   canvas's internal drawing buffer (612x669) didn't match its CSS box
+   (306x220) at all, rendering as a broken/blank chart, not just a
+   mis-sized one. `.chart-canvas-wrap` is that required stable-height
+   parent -- position:relative is Chart.js's own documented requirement
+   for this pattern, so its internal absolutely-positioned canvas
+   sizing has something to measure against. */
+.chart-canvas-wrap { position:relative; height:280px; max-width:100%; }
+@media (max-width:600px) { .chart-canvas-wrap { height:220px; } }
+
 /* PPA Tools' capture-rate-by-month line chart re-uses charts_live.py's
    .chart-hit hover-highlight idea, but that class is scoped to body.live
    (Live Market's dark theme) only -- this page has no such class, so its
@@ -185,6 +211,32 @@ footer dt { color:var(--ink); } footer dd { margin:0; }
   footer dl { grid-template-columns:1fr; gap:2px 0; }
   footer dt { margin-top:8px; }
   table { font-size:12.5px; }
+}
+
+/* Nav bar: at 375px (a typical phone), the unmodified layout below
+   simply doesn't fit -- brand text plus 5 links at 14px/side padding
+   overflows the flex row's width with nothing to wrap or shrink into,
+   so the last link(s) (confirmed live: "PPA tools") get pushed off
+   past the visible viewport entirely rather than just looking cramped.
+   Fix is structural, not cosmetic (padding/font tweaks alone don't
+   reclaim enough width): stack the brand above the nav instead of
+   beside it, drop the decorative "/ Energy Data Analytics" subtitle
+   (the brand name alone is enough context at this size), and let nav
+   links wrap onto a second row with tighter padding. Deliberately
+   plain flex-wrap, no JS hamburger menu -- consistent with this
+   project's plain-Jinja2/no-framework approach elsewhere, and 5 links
+   wrapped onto two short rows reads fine without one. Unscoped (not
+   under body.live), so this one change fixes both the light and dark
+   themes at once -- the dark theme only overrides .appnav's colors,
+   never its layout, confirmed live: the overflow reproduces identically
+   on Forecasts/Live Market (dark) and PPA Tools (light). */
+@media (max-width:600px) {
+  .appnav .wrap { flex-direction:column; align-items:flex-start; gap:0; padding:10px 16px; }
+  .appnav .brand { padding:4px 0; }
+  .appnav .brand span { display:none; }
+  .appnav nav { flex-wrap:wrap; gap:0 4px; width:100%; }
+  .appnav a { padding:8px 8px; font-size:12.5px; }
+  .wrap { padding-left:16px; padding-right:16px; }
 }
 
 /* ---------------------------------------------------------------------
