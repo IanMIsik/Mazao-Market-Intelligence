@@ -28,6 +28,29 @@
 
 {% block extra_body %}{% endblock %}
 <script>
+// Shared by both this file's own tap-tooltip below and forecasts.html's
+// multi-day crosshair tooltip -- positions a `position:fixed` tooltip
+// near (x, y) but clamped fully inside the viewport. Confirmed live:
+// the naive "just offset from the cursor" positioning this replaced let
+// a tooltip run off the right/bottom edge on a phone whenever the tap
+// landed near one, regardless of the element's own max-width/wrapping
+// (that fixes the box being WIDER than the screen; this fixes it being
+// positioned partly OFF the screen, a separate failure mode -- both
+// were needed). El must already have its real content set (and
+// display:block, even if via this same call) before this runs, since
+// it measures the actual rendered box via getBoundingClientRect().
+function positionChartTooltip(el, x, y) {
+  el.style.display = 'block';
+  var margin = 8;
+  var rect = el.getBoundingClientRect();
+  var left = Math.min(x + 12, window.innerWidth - rect.width - margin);
+  left = Math.max(margin, left);
+  var top = Math.min(y - 12, window.innerHeight - rect.height - margin);
+  top = Math.max(margin, top);
+  el.style.left = left + 'px';
+  el.style.top = top + 'px';
+}
+
 (function () {
   // charts_live.py's progression_svg/comparison_svg/triple_comparison_svg/
   // dual_series_svg (Live Market's Fundamentals/Interconnectors/Generation
@@ -54,9 +77,7 @@
     hit.addEventListener('click', function (e) {
       e.stopPropagation();
       tip.textContent = titleEl.textContent;
-      tip.style.left = (e.clientX + 12) + 'px';
-      tip.style.top = (e.clientY - 12) + 'px';
-      tip.style.display = 'block';
+      positionChartTooltip(tip, e.clientX, e.clientY);
     });
   });
   document.addEventListener('click', function () { tip.style.display = 'none'; });

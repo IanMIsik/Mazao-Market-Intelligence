@@ -180,9 +180,10 @@
       var screenX = rect.left + (x / viewBox.width) * rect.width;
       var screenY = rect.top + (y / viewBox.height) * rect.height;
       tooltip.textContent = formatDate(p.date) + ' SP' + p.sp + ': ' + p.value.toLocaleString('en-GB') + ' ' + unit;
-      tooltip.style.left = (screenX + 12) + 'px';
-      tooltip.style.top = (screenY - 12) + 'px';
-      tooltip.style.display = 'block';
+      // positionChartTooltip (base.html) clamps this fully inside the
+      // viewport -- confirmed live, the plain offset this replaced ran
+      // off the right edge whenever the crosshair was scrubbed near it.
+      positionChartTooltip(tooltip, screenX, screenY);
     }
 
     // Pointer events, not mouse* -- confirmed live, mousemove/mouseleave

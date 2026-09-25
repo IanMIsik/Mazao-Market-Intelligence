@@ -360,9 +360,16 @@ body.live .chart-crosshair { stroke:var(--lm-dim); stroke-width:1; stroke-dashar
 body.live .chart-crosshair-dot { pointer-events:none; }
 body.live .lm-stat-row { font-family:var(--lm-mono); font-size:10.5px; color:var(--lm-dim); margin:2px 0 8px; }
 body.live .lm-stat-row b { color:var(--lm-text); font-weight:600; }
+/* max-width + normal white-space (not nowrap), both pages' own JS now
+   clamps left/top to the viewport too (see forecasts.html and
+   base.html) -- confirmed live, a longer reading (Live Market's
+   "Actual 11513 MW, Actual+curtailed 14191.6 MW, Forecast 13432 MW" is
+   ~70 characters) is wider than a phone screen on its own regardless
+   of where it's positioned, so clamping position alone can't fix it;
+   needs to actually wrap. */
 .fc-tooltip { position:fixed; display:none; pointer-events:none; z-index:20; font-family:var(--lm-mono);
   font-size:11px; background:var(--lm-surface2); color:var(--lm-text); border:1px solid var(--lm-border);
-  border-radius:4px; padding:4px 8px; white-space:nowrap; }
+  border-radius:4px; padding:4px 8px; white-space:normal; max-width:min(280px, calc(100vw - 24px)); }
 
 /* Tap-to-reveal tooltip for .chart-hit circles on touch devices (see
    base.html's own script -- native SVG <title> tooltips don't fire on
@@ -371,7 +378,8 @@ body.live .lm-stat-row b { color:var(--lm-text); font-weight:600; }
    Forecasts single-day charts and the dark-theme Live Market ones;
    body.live below restyles it to match .fc-tooltip's own look. */
 .chart-tap-tooltip { position:fixed; display:none; pointer-events:none; z-index:30; font-size:12px;
-  background:var(--navy); color:#fff; border-radius:4px; padding:5px 9px; white-space:nowrap; }
+  background:var(--navy); color:#fff; border-radius:4px; padding:5px 9px; white-space:normal;
+  max-width:min(280px, calc(100vw - 24px)); }
 body.live .chart-tap-tooltip { font-family:var(--lm-mono); font-size:11px; background:var(--lm-surface2);
   color:var(--lm-text); border:1px solid var(--lm-border); }
 
