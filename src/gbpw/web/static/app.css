@@ -140,9 +140,11 @@ h1 { font-family:var(--serif); font-weight:400; color:var(--navy);
 .kpi { padding:16px 20px 15px; border-left:1px solid var(--rule-soft); }
 .kpi:first-child { border-left:0; padding-left:0; }
 .kpi .k { color:var(--muted); font-size:13px; }
-.kpi .v { font-size:27px; color:var(--navy); font-weight:600; letter-spacing:-.01em; margin:2px 0 1px; }
+.kpi .v { font-size:27px; color:var(--navy); font-weight:600; letter-spacing:-.01em; margin:2px 0 1px;
+  overflow-wrap:anywhere; }
 .kpi .v small { font-size:14px; font-weight:500; color:var(--navy-mid); }
-.kpi .v2 { font-size:19px; color:var(--navy); font-weight:600; letter-spacing:-.01em; margin:3px 0 0; line-height:1.5; }
+.kpi .v2 { font-size:19px; color:var(--navy); font-weight:600; letter-spacing:-.01em; margin:3px 0 0; line-height:1.5;
+  overflow-wrap:anywhere; }
 .kpi .v2 small { font-size:12.5px; font-weight:500; color:var(--muted); margin-left:2px; }
 .kpi .ref { font-size:13px; color:var(--muted); }
 
@@ -217,6 +219,14 @@ footer dt { color:var(--ink); } footer dd { margin:0; }
   .kpi { border-top:1px solid var(--rule-soft); border-left:1px solid var(--rule-soft); padding-left:20px; }
   .kpi:nth-child(odd) { border-left:0; padding-left:0; }
   .kpi:first-child, .kpi:nth-child(2) { border-top:0; }
+  /* Two columns halves each .kpi's width -- confirmed live, a longer
+     value (BESS Analytics' "£3.97/MW/h") no longer fits at the
+     desktop 27px size and bled past the card edge. overflow-wrap
+     above is the safety net for any value; this is the cleaner-
+     looking fix for the common case, sized down enough that typical
+     figures on this site (currency + up to ~2dp + a short unit) fit
+     one one line in half the card width. */
+  .kpi .v { font-size:21px; }
   h1 { font-size:22px; }
   .filters .row { align-items:flex-start; }
   footer dl { grid-template-columns:1fr; gap:2px 0; }
