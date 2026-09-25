@@ -155,6 +155,13 @@ h3 { font-size:13.5px; color:var(--navy); margin:26px 0 4px; font-weight:600; }
 .section-note { font-size:12.5px; color:var(--muted); margin:8px 0 0; }
 
 svg { display:block; width:100%; height:auto; }
+/* Forecasts' multi-day crosshair (see forecasts.html's own script) needs
+   continuous pointermove while a finger drags across the chart -- without
+   this, a touch-drag here is captured as a page-scroll gesture instead,
+   confirmed live, and the crosshair never gets a chance to track it. The
+   accepted trade-off is that you can't scroll the page from directly over
+   this specific chart; scroll from anywhere else on the page still works. */
+svg.chart-multiday { touch-action:none; }
 .ax { font-family:var(--sans); font-size:12px; fill:var(--muted); font-variant-numeric:tabular-nums; }
 .ax.sm { font-size:10.5px; }
 .ax.unit { fill:var(--navy-mid); font-weight:600; }
@@ -356,6 +363,17 @@ body.live .lm-stat-row b { color:var(--lm-text); font-weight:600; }
 .fc-tooltip { position:fixed; display:none; pointer-events:none; z-index:20; font-family:var(--lm-mono);
   font-size:11px; background:var(--lm-surface2); color:var(--lm-text); border:1px solid var(--lm-border);
   border-radius:4px; padding:4px 8px; white-space:nowrap; }
+
+/* Tap-to-reveal tooltip for .chart-hit circles on touch devices (see
+   base.html's own script -- native SVG <title> tooltips don't fire on
+   tap). Defined here, not scoped to body.live, since base.html's script
+   runs on every page and .chart-hit is used by both the light-theme
+   Forecasts single-day charts and the dark-theme Live Market ones;
+   body.live below restyles it to match .fc-tooltip's own look. */
+.chart-tap-tooltip { position:fixed; display:none; pointer-events:none; z-index:30; font-size:12px;
+  background:var(--navy); color:#fff; border-radius:4px; padding:5px 9px; white-space:nowrap; }
+body.live .chart-tap-tooltip { font-family:var(--lm-mono); font-size:11px; background:var(--lm-surface2);
+  color:var(--lm-text); border:1px solid var(--lm-border); }
 
 body.live .lm-kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:1px;
   background:var(--lm-border); border:1px solid var(--lm-border); border-radius:6px; overflow:hidden; margin:18px 0 0; }

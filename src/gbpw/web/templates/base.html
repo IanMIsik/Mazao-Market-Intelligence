@@ -27,5 +27,41 @@
 </div>
 
 {% block extra_body %}{% endblock %}
+<script>
+(function () {
+  // charts_live.py's progression_svg/comparison_svg/triple_comparison_svg/
+  // dual_series_svg (Live Market's Fundamentals/Interconnectors/Generation
+  // tabs, Forecasts' single-day views) put each point's reading in a
+  // native SVG <title>, shown only via the browser's own hover tooltip --
+  // confirmed live, that's genuinely inert on a touchscreen (no hover
+  // state, no standard touch equivalent), which is why these charts
+  // render but have no way to read an exact value on mobile. No new
+  // touch-specific wiring needed to fix it: a tap already fires a normal
+  // synthesized `click` in every mobile browser, so this reuses that to
+  // show the same <title> text in a small custom tooltip instead.
+  // Unconditional here (not per-page) since this same pattern is shared
+  // across both pages above -- a no-op wherever no .chart-hit exists.
+  var hits = document.querySelectorAll('.chart-hit');
+  if (!hits.length) return;
+
+  var tip = document.createElement('div');
+  tip.className = 'chart-tap-tooltip';
+  document.body.appendChild(tip);
+
+  hits.forEach(function (hit) {
+    var titleEl = hit.querySelector('title');
+    if (!titleEl) return;
+    hit.addEventListener('click', function (e) {
+      e.stopPropagation();
+      tip.textContent = titleEl.textContent;
+      tip.style.left = (e.clientX + 12) + 'px';
+      tip.style.top = (e.clientY - 12) + 'px';
+      tip.style.display = 'block';
+    });
+  });
+  document.addEventListener('click', function () { tip.style.display = 'none'; });
+  document.addEventListener('scroll', function () { tip.style.display = 'none'; }, true);
+})();
+</script>
 </body>
 </html>

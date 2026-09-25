@@ -185,8 +185,16 @@
       tooltip.style.display = 'block';
     }
 
-    svg.addEventListener('mousemove', function (e) { render(e.clientX, e.clientY); });
-    svg.addEventListener('mouseleave', function () {
+    // Pointer events, not mouse* -- confirmed live, mousemove/mouseleave
+    // never fire for touch input at all, so this crosshair was simply
+    // inert on a phone (chart still rendered, just nothing tracked a
+    // finger). Pointer events unify mouse/touch/pen with the same
+    // clientX/clientY shape render() already expects. touch-action:none
+    // on svg.chart-multiday (see app.css) is the other required half --
+    // without it a touch-drag over the chart is captured as a page-
+    // scroll gesture before pointermove ever fires continuously.
+    svg.addEventListener('pointermove', function (e) { render(e.clientX, e.clientY); });
+    svg.addEventListener('pointerleave', function () {
       lastIdx = null;
       crosshair.style.display = 'none';
       dot.style.display = 'none';
