@@ -24,6 +24,23 @@ def _local_midnight_utc(d: date) -> datetime:
     return datetime(d.year, d.month, d.day, 0, 0, tzinfo=LONDON).astimezone(UTC)
 
 
+def london_today() -> date:
+    """Today's date in Europe/London civil time -- NOT `date.today()`,
+    which is the server's own system-clock timezone. Confirmed live: this
+    app's EC2 deployment runs on plain UTC system time, so during BST
+    (UTC+1, roughly late March to late October) `date.today()` on that
+    box is a real hour behind the UK's actual calendar date for the
+    first hour after London midnight (23:00-23:59 UTC = 00:00-00:59
+    BST) -- a genuine, if narrow, daily window where the server would
+    think "today" is still yesterday. Every settlement-period/date
+    calculation in this module is already Europe/London by design (see
+    module docstring); routes computing "today" for display/filtering
+    should use this instead of a bare `date.today()` for the same
+    reason.
+    """
+    return datetime.now(LONDON).date()
+
+
 def periods_in_date(d: date) -> int:
     """Number of settlement periods in the local settlement day `d`."""
     start = _local_midnight_utc(d)

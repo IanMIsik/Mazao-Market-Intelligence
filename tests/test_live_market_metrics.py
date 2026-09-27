@@ -19,6 +19,18 @@ def test_week_so_far_none_on_monday():
     assert lmm.week_so_far(date(2026, 9, 14)) is None
 
 
+def test_week_so_far_full_week_on_sunday():
+    # Regression test for a real bug: week_so_far() used to compute
+    # Monday via settlement.most_recent_sunday(today) + 1 day, which
+    # returns *tomorrow* when today is itself a Sunday (most_recent_sunday
+    # is "on or before", so it returns today's own date) -- landing on
+    # `monday > yesterday` the same way an actual Monday deliberately
+    # does, silently hiding the whole in-progress week every Sunday. Sun
+    # 20 Sep 2026's in-progress week should run Mon 14 Sep .. Sat 19 Sep,
+    # a full 6-day week, not None.
+    assert lmm.week_so_far(date(2026, 9, 20)) == (date(2026, 9, 14), date(2026, 9, 19))
+
+
 def test_day_stats_computes_avg_peak_trough_per_day(tmp_path):
     conn = connect(tmp_path / "test.db")
     d1, d2 = date(2026, 9, 14), date(2026, 9, 15)

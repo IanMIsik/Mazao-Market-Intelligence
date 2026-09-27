@@ -31,7 +31,7 @@ that's disclosed on the chart, not hidden by giving each its own card.
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
@@ -43,6 +43,7 @@ from .. import fuelinst_metrics as fim
 from .. import live_market_metrics as lmm
 from .. import power_flow_metrics as pfm
 from ..ingest.elexon import INTERCONNECTORS
+from ..settlement import london_today
 from ..storage import latest_fetch_ts
 from . import charts_generation, charts_live, http_cache
 from .deps import get_db
@@ -81,7 +82,7 @@ def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db))
     if cached is not None:
         return cached
 
-    today = date.today()
+    today = london_today()
     week_range = lmm.week_so_far(today)
     dates = list(_date_range(*week_range)) if week_range else []
 

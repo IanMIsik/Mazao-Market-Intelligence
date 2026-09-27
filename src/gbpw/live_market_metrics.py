@@ -18,7 +18,6 @@ import sqlite3
 import statistics
 from datetime import date, timedelta
 
-from .settlement import most_recent_sunday
 from .storage import series_for_week
 
 
@@ -26,8 +25,21 @@ def week_so_far(today: date) -> tuple[date, date] | None:
     """Monday of the in-progress week through yesterday. None if today is
     itself Monday -- the week has no complete trailing days yet, only
     today's live progression is meaningful.
+
+    `today - timedelta(days=today.weekday())` (weekday(): Monday=0 ..
+    Sunday=6) directly, not `settlement.most_recent_sunday(today) + 1
+    day` (a real bug this replaced) -- most_recent_sunday() returns the
+    Sunday *on or before* today, which is exactly today's own date when
+    today is itself a Sunday, so `+1 day` landed on tomorrow, not this
+    week's actual Monday. That made `monday > yesterday` true on a
+    Sunday the same way it's deliberately true on a Monday, so the
+    whole in-progress week's history silently disappeared every Sunday
+    -- confirmed live. most_recent_sunday()'s "on or before" semantics
+    are correct for its own purpose (GB Power Weekly's most-recently-
+    *completed* week-ending); they were just never the right fit for
+    "Monday of the week containing today" here.
     """
-    monday = most_recent_sunday(today) + timedelta(days=1)
+    monday = today - timedelta(days=today.weekday())
     yesterday = today - timedelta(days=1)
     if monday > yesterday:
         return None
