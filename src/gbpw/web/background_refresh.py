@@ -36,7 +36,7 @@ from ..ingest import (
     ingest_week_parallel,
     ingest_wind_curtailment,
 )
-from ..settlement import london_today
+from ..settlement import london_today, periods_in_date
 from ..storage import connect
 
 logger = logging.getLogger("gbpw.web.background_refresh")
@@ -104,6 +104,29 @@ def _refresh_once(db_path: Path) -> None:
         # Must run after ingest_week_parallel() above -- it queries
         # today's already-ingested `wind` periods to know which
         # settlement periods are even worth an ISPSTACK call yet.
+        #
+        # Unlike the other Live Market series above, this one had the
+        # exact same "never revisited once it's yesterday" bug just fixed
+        # for ingest_week_parallel() -- confirmed live, wind_curtailed_mw
+        # was still stuck at its old partial counts (e.g. 38/48) after
+        # that fix, because this call was never widened. But ISPSTACK has
+        # no bulk endpoint (one call per settlement period, see
+        # ingest_wind_curtailment()'s own docstring), so naively widening
+        # this the same way -- unconditionally re-running the whole
+        # Monday..today range every 5-minute cycle, forever -- would mean
+        # up to 7 days x 48 calls every cycle, most of them for days that
+        # are already complete and will never change again. Only backfill
+        # a past day that's genuinely still incomplete (checked fresh each
+        # cycle, cheap local query, not assumed); today itself is always
+        # re-ingested regardless, same as before, since it's expected to
+        # be incomplete until the day actually ends.
+        for past_day in live_market_days[:-1]:
+            distinct_sp = conn.execute(
+                "SELECT COUNT(DISTINCT sp) FROM prices WHERE series = 'wind_curtailed_mw' AND sd = ?",
+                (past_day.isoformat(),),
+            ).fetchone()[0]
+            if distinct_sp < periods_in_date(past_day):
+                ingest_wind_curtailment(conn, past_day)
         ingest_wind_curtailment(conn, today)
         # FUELINST and the Carbon Intensity API both already publish on
         # the same 5-minute-or-finer cadence as this loop, so no separate
