@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import IO
 
@@ -36,6 +36,7 @@ from ..ingest import (
     ingest_week_parallel,
     ingest_wind_curtailment,
 )
+from ..settlement import london_today
 from ..storage import connect
 
 logger = logging.getLogger("gbpw.web.background_refresh")
@@ -45,7 +46,7 @@ TRAILING_WINDOW_DAYS = 3  # EAC/BM data for the last few days can still be revis
 
 
 def _refresh_once(db_path: Path) -> None:
-    today = date.today()
+    today = london_today()
     start = today - timedelta(days=TRAILING_WINDOW_DAYS)
     # EAC clears day-ahead -- NESO routinely publishes tomorrow's auction
     # results well before today is over (see routes_bess.py's auction_day
@@ -68,11 +69,28 @@ def _refresh_once(db_path: Path) -> None:
     ingest_bm_cashflows_range_parallel(db_path, start, today)
     logger.info("background refresh: re-ingested EAC for %s..%s, BM cashflows for %s..%s", start, eac_end, start, today)
 
-    # Live Market only ever shows *today* live (the rest of its "week so
-    # far" is already-settled data GB Power Weekly's own ingest covers) --
-    # a single date is enough here, unlike the trailing window above.
-    ingest_week_parallel(db_path, [today])
-    logger.info("background refresh: re-ingested today's Live Market fundamentals (incl. solar/forecasts/interconnectors) for %s", today)
+    # Live Market's day-picker (see routes_live.py) shows any day in the
+    # current in-progress week, not just today -- re-ingest the whole
+    # Monday..today range every cycle, not just [today], so a gap from a
+    # missed cycle (a restart, a slow fetch, anything) gets closed
+    # retroactively. This used to be [today] only, on the assumption that
+    # once a day becomes "yesterday" it's "already-settled data GB Power
+    # Weekly's own ingest covers" -- true for *prior* weeks (backfilled by
+    # the Monday cron, see deploy/weekly-cron.sh), but never true for the
+    # current week's own past days, which GB Power Weekly's ingest hasn't
+    # touched yet by definition (the week isn't over). Confirmed live:
+    # this was a real, permanent gap, not a hypothetical one -- a day only
+    # ever had whatever periods got captured during cycles that ran while
+    # it was still "today"; once it rolled over, nothing ever revisited it.
+    # Bounded to at most 7 days (Monday..Sunday), so the added network
+    # cost this cycle is real but capped, not unbounded.
+    monday = today - timedelta(days=today.weekday())
+    live_market_days = [monday + timedelta(days=i) for i in range((today - monday).days + 1)]
+    ingest_week_parallel(db_path, live_market_days)
+    logger.info(
+        "background refresh: re-ingested Live Market fundamentals (incl. solar/forecasts/interconnectors) for %s..%s",
+        live_market_days[0], today,
+    )
 
     # Not date-scoped (embedded forecasts, carbon intensity) or
     # Live-Market-only (scheduled interconnector flows) -- see
