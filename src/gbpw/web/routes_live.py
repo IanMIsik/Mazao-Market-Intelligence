@@ -17,7 +17,7 @@ wired in -- see ingest/neso_embedded.py, entsoe_flows.py, semo_flows.py.
 extra_body block) -- it reloads only when a background refresh cycle has
 actually landed new data, not on a blind fixed-interval timer.
 
-Wind has no standalone "raw actual" KPI card -- only `wind_true_cmp`
+Wind has no standalone "raw actual" KPI card -- only `kpi_wind`
 (actual + instructed-shut volume, lagging ~18 minutes behind real time,
 Elexon's own bid-acceptance publish delay -- see live_market_metrics.
 actual_plus_addon_vs_forecast()) gets one, so the KPI row stays at 5
@@ -26,6 +26,18 @@ actual line and the +curtailed line together on one set of axes
 (actual_and_addon_vs_forecast()) -- the two solid lines will genuinely
 end at different settlement periods given the addon's publish lag;
 that's disclosed on the chart, not hidden by giving each its own card.
+
+The KPI row (`kpi_wind`/`kpi_demand`/`kpi_solar`/`imbalance_today`/
+`imbalance_volume_today`) is always today's live state; the day-picker
+(`day` query param, see live_market.html) only affects which day the
+Fundamentals/Interconnectors *charts* below it show
+(`imbalance_dual_svg`/`wind_triple_svg`/`demand_cmp_svg`/
+`solar_cmp_svg`, each interconnector's own `cmp`) -- deliberately kept
+separate rather than redefining "latest" to mean something different
+depending on a selection. Every metric function this drives
+(live_market_metrics.py) is already date-generic, so a past complete
+day works through the exact same calls as today's partial one; no
+separate historical code path.
 """
 
 from __future__ import annotations
@@ -71,11 +83,14 @@ FUNDAMENTALS = [
 
 
 @router.get("/live", response_class=HTMLResponse)
-def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db)):
+def live_market_page(request: Request, day: str = "today", db: sqlite3.Connection = Depends(get_db)):
     # Cheap freshness check before any of the real queries below -- a
     # reload that lands between two background-refresh cycles (the
     # common case for a tab left open) short-circuits into a 304 here
     # instead of re-running everything just to rebuild identical HTML.
+    # Deliberately ignores `day` -- last_updated only reflects freshly-
+    # ingested *today* data, so it's still the right cache key even when
+    # viewing a past (unchanging) day.
     last_updated = latest_fetch_ts(db) or ""
     etag = http_cache.etag_for(last_updated)
     cached = http_cache.not_modified(request, etag)
@@ -86,14 +101,36 @@ def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db))
     week_range = lmm.week_so_far(today)
     dates = list(_date_range(*week_range)) if week_range else []
 
+    # Which day the Fundamentals/Interconnectors *charts* show -- "today"
+    # (live, partial) by default, or a past day within the current
+    # in-progress week if picked via the day-picker (see live_market.html).
+    # Anything unrecognised (a stale/hand-edited link, a day outside this
+    # week) falls back to today rather than erroring -- same convention
+    # PPA Tools' own `window` query param already uses.
+    valid_days = {d.isoformat(): d for d in dates}
+    view_date = valid_days.get(day, today)
+    viewing_today = view_date == today
+    view_date_label = "today so far" if viewing_today else view_date.strftime("%a %d %b %Y")
+
+    # KPI row is always live "today", regardless of which day's charts
+    # are selected below it -- see the plan's own reasoning for keeping
+    # these two concerns split rather than redefining "latest" per-day.
     imbalance_today = lmm.today_progression(db, "imbalance", today)
     imbalance_delta = lmm.delta_vs_yesterday(db, "imbalance", today)
     imbalance_volume_today = lmm.today_progression(db, "imbalance_volume", today)
+    kpi_wind = lmm.actual_plus_addon_vs_forecast(db, "wind", "wind_curtailed_mw", "wind_forecast", today)
+    kpi_demand = lmm.actual_vs_forecast(db, "demand", "demand_forecast", today)
+    kpi_solar = lmm.actual_vs_forecast(db, "solar", "solar_forecast", today)
+
+    # Chart data follows view_date -- every one of these functions is
+    # already fully date-generic (see live_market_metrics.py), so a past,
+    # complete day just returns a full run of points instead of a partial
+    # one; no new data-layer logic needed for the day-picker itself.
     # Price (£/MWh) and net imbalance volume (MWh) don't share a unit --
     # a single shared y-axis would flatten whichever has the smaller
     # range, so this gets its own dual-axis chart, not a third line
     # squeezed onto an existing one.
-    imbalance_dual = lmm.dual_series_today(db, "imbalance", "imbalance_volume", today)
+    imbalance_dual = lmm.dual_series_today(db, "imbalance", "imbalance_volume", view_date)
 
     # wind_curtailed_mw (capacity instructed off via the Balancing
     # Mechanism, see ingest/wind_curtailment.py) lags real time by ~18
@@ -102,10 +139,11 @@ def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db))
     # wind actual. Merging them into one line would make that lag look
     # like a data dropout in the actual series; kept as its own chart line
     # instead (see wind_triple below).
-    wind_true_cmp = lmm.actual_plus_addon_vs_forecast(db, "wind", "wind_curtailed_mw", "wind_forecast", today)
-    wind_triple = lmm.actual_and_addon_vs_forecast(db, "wind", "wind_curtailed_mw", "wind_forecast", today)
-    demand_cmp = lmm.actual_vs_forecast(db, "demand", "demand_forecast", today)
-    solar_cmp = lmm.actual_vs_forecast(db, "solar", "solar_forecast", today)
+    wind_triple = lmm.actual_and_addon_vs_forecast(db, "wind", "wind_curtailed_mw", "wind_forecast", view_date)
+    demand_cmp = lmm.actual_vs_forecast(db, "demand", "demand_forecast", view_date)
+    solar_cmp = lmm.actual_vs_forecast(db, "solar", "solar_forecast", view_date)
+
+    day_options = [{"iso": d.isoformat(), "label": d.strftime("%a %d %b")} for d in dates]
 
     fundamentals_days = {f["series"]: lmm.day_stats(db, f["series"], dates) for f in FUNDAMENTALS}
     combined_days = [
@@ -115,19 +153,24 @@ def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db))
 
     interconnectors = []
     for key, name, country in sorted(INTERCONNECTORS.values(), key=lambda v: v[1]):
-        cmp = lmm.actual_vs_forecast(db, f"interconnector_{key}_actual", f"interconnector_{key}_scheduled", today)
-        regions = lmm.deviation_regions(cmp["points"])
+        # cmp_today (header value + active_deviation) is always live,
+        # same "KPI row stays live" split as the Fundamentals tab above;
+        # cmp (the chart itself) follows view_date.
+        cmp_today = lmm.actual_vs_forecast(db, f"interconnector_{key}_actual", f"interconnector_{key}_scheduled", today)
+        cmp = lmm.actual_vs_forecast(db, f"interconnector_{key}_actual", f"interconnector_{key}_scheduled", view_date)
+        regions = lmm.deviation_regions(cmp_today["points"])
         # Only the deviation happening right now, if any -- a run that
         # ended earlier today (flow's back on schedule since) isn't shown
         # at all, rather than as a stale "was overperforming since SP3"
         # note that no longer describes what's happening. This page's
         # figures are a live, current-state picture throughout; this is
         # the same treatment, not a running log of today's deviations.
-        active_deviation = regions[-1] if regions and regions[-1]["end_sp"] == cmp["latest_sp"] else None
+        active_deviation = regions[-1] if regions and regions[-1]["end_sp"] == cmp_today["latest_sp"] else None
         interconnectors.append({
             "key": key,
             "name": name,
             "country": country,
+            "cmp_today": cmp_today,
             "cmp": cmp,
             "cmp_svg": charts_live.comparison_svg(cmp["points"], "var(--lm-violet)", "var(--lm-dim)", "MW"),
             "active_deviation": active_deviation,
@@ -190,13 +233,20 @@ def live_market_page(request: Request, db: sqlite3.Connection = Depends(get_db))
         "week_range": week_range,
         "fundamentals": FUNDAMENTALS,
         "combined_days": combined_days,
+        "day": day,
+        "day_options": day_options,
+        "view_date": view_date,
+        "viewing_today": viewing_today,
+        "view_date_label": view_date_label,
         "imbalance_today": imbalance_today,
         "imbalance_delta": imbalance_delta,
         "imbalance_volume_today": imbalance_volume_today,
+        "kpi_wind": kpi_wind,
+        "kpi_demand": kpi_demand,
+        "kpi_solar": kpi_solar,
         "imbalance_dual_svg": charts_live.dual_series_svg(
             imbalance_dual["points"], "var(--lm-amber)", "var(--lm-violet)", "£/MWh", "MWh"
         ),
-        "wind_true_cmp": wind_true_cmp,
         "wind_triple_svg": charts_live.triple_comparison_svg(
             wind_triple["points"], "var(--lm-teal)", "var(--lm-violet)", "var(--lm-dim)", "MW"
         ),

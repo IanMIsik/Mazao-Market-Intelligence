@@ -66,31 +66,45 @@
     </div>
     <div class="lm-kpi">
       <div class="k" title="Wind output plus capacity instructed off via the Balancing Mechanism -- lags real time by ~18 minutes, Elexon's own bid-acceptance publish delay">Wind + curtailed, latest</div>
-      {% if wind_true_cmp.latest_actual is not none %}
-      <div class="v">{{ (wind_true_cmp.latest_actual / 1000)|commas(2) }} <small>GW</small></div>
-      <div class="delta flat">SP{{ wind_true_cmp.latest_sp }}</div>
+      {% if kpi_wind.latest_actual is not none %}
+      <div class="v">{{ (kpi_wind.latest_actual / 1000)|commas(2) }} <small>GW</small></div>
+      <div class="delta flat">SP{{ kpi_wind.latest_sp }}</div>
       {% else %}<div class="v">&mdash;</div><div class="delta flat">not published yet</div>{% endif %}
     </div>
     <div class="lm-kpi">
       <div class="k">Solar output, latest</div>
-      {% if solar_cmp.latest_actual is not none %}
-      <div class="v">{{ (solar_cmp.latest_actual / 1000)|commas(2) }} <small>GW</small></div>
-      <div class="delta flat">SP{{ solar_cmp.latest_sp }}</div>
+      {% if kpi_solar.latest_actual is not none %}
+      <div class="v">{{ (kpi_solar.latest_actual / 1000)|commas(2) }} <small>GW</small></div>
+      <div class="delta flat">SP{{ kpi_solar.latest_sp }}</div>
       {% else %}<div class="v">&mdash;</div><div class="delta flat">no data yet today</div>{% endif %}
     </div>
     <div class="lm-kpi">
       <div class="k">Demand, latest</div>
-      {% if demand_cmp.latest_actual is not none %}
-      <div class="v">{{ (demand_cmp.latest_actual / 1000)|commas(2) }} <small>GW</small></div>
-      <div class="delta flat">SP{{ demand_cmp.latest_sp }}</div>
+      {% if kpi_demand.latest_actual is not none %}
+      <div class="v">{{ (kpi_demand.latest_actual / 1000)|commas(2) }} <small>GW</small></div>
+      <div class="delta flat">SP{{ kpi_demand.latest_sp }}</div>
       {% else %}<div class="v">&mdash;</div><div class="delta flat">no data yet today</div>{% endif %}
     </div>
   </div>
 
+  {% if day_options %}
+  <div class="filters">
+    <div class="row">
+      <div class="flabel">Day</div>
+      <div class="range">
+        <a href="?day=today" class="{{ 'on' if viewing_today else '' }}">Today</a>
+        {% for d in day_options %}
+        <a href="?day={{ d.iso }}" class="{{ 'on' if day == d.iso else '' }}">{{ d.label }}</a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="lm-panels">
     <div class="lm-card">
       <div class="lm-card-title">Wind: actual, actual+curtailed &amp; forecast</div>
-      <div class="lm-card-sub">today so far, MW &middot; "actual+curtailed" adds capacity instructed off via the
+      <div class="lm-card-sub">{{ view_date_label }}, MW &middot; "actual+curtailed" adds capacity instructed off via the
       Balancing Mechanism and lags real time by ~18 minutes (Elexon's own bid-acceptance publish delay), so it
       trails plain actual by a period or two &middot; forecast is the latest-published WINDFOR vintage</div>
       <div class="lm-legend">
@@ -98,40 +112,44 @@
         <span><i style="background:var(--lm-violet);"></i>Actual+curtailed</span>
         <span><i class="dashed"></i>Forecast</span>
       </div>
-      {% if wind_triple_svg %}{{ wind_triple_svg | safe }}{% else %}<div class="lm-empty">No wind data published yet today.</div>{% endif %}
+      {% if wind_triple_svg %}{{ wind_triple_svg | safe }}{% else %}<div class="lm-empty">No wind data for this day yet.</div>{% endif %}
     </div>
     <div class="lm-card">
       <div class="lm-card-title">Demand: actual vs forecast</div>
-      <div class="lm-card-sub">today so far, MW &middot; actual is the Indicative National Demand Outturn (INDO)
+      <div class="lm-card-sub">{{ view_date_label }}, MW &middot; actual is the Indicative National Demand Outturn (INDO)
       &middot; forecast is the latest-published National Demand Forecast (NDF) vintage</div>
       <div class="lm-legend">
         <span><i style="background:var(--lm-violet);"></i>Actual</span>
         <span><i class="dashed"></i>Forecast</span>
       </div>
-      {% if demand_cmp_svg %}{{ demand_cmp_svg | safe }}{% else %}<div class="lm-empty">No demand data published yet today.</div>{% endif %}
+      {% if demand_cmp_svg %}{{ demand_cmp_svg | safe }}{% else %}<div class="lm-empty">No demand data for this day yet.</div>{% endif %}
     </div>
     <div class="lm-card">
       <div class="lm-card-title">Solar: actual vs forecast</div>
-      <div class="lm-card-sub">today so far, MW &middot; forecast is NESO's embedded solar forecast</div>
+      <div class="lm-card-sub">{{ view_date_label }}, MW &middot; forecast is NESO's embedded solar forecast</div>
       <div class="lm-legend">
         <span><i style="background:var(--lm-gold);"></i>Actual</span>
         <span><i class="dashed"></i>Forecast</span>
       </div>
-      {% if solar_cmp_svg %}{{ solar_cmp_svg | safe }}{% else %}<div class="lm-empty">No solar data published yet today.</div>{% endif %}
+      {% if solar_cmp_svg %}{{ solar_cmp_svg | safe }}{% else %}<div class="lm-empty">No solar data for this day yet.</div>{% endif %}
     </div>
     <div class="lm-card">
       <div class="lm-card-title">Imbalance: price &amp; volume</div>
-      <div class="lm-card-sub">today so far &middot; price (left axis, £/MWh) is the same systemSellPrice shown above
+      <div class="lm-card-sub">{{ view_date_label }} &middot; price (left axis, £/MWh) is the same systemSellPrice shown above
       &middot; volume (right axis, MWh) is the Net Imbalance Volume (NIV) for the settlement period, and can be
       negative</div>
       <div class="lm-legend">
         <span><i style="background:var(--lm-amber);"></i>Price</span>
         <span><i style="background:var(--lm-violet);"></i>Volume</span>
       </div>
-      {% if imbalance_dual_svg %}{{ imbalance_dual_svg | safe }}{% else %}<div class="lm-empty">No imbalance data published yet today.</div>{% endif %}
+      {% if imbalance_dual_svg %}{{ imbalance_dual_svg | safe }}{% else %}<div class="lm-empty">No imbalance data for this day yet.</div>{% endif %}
     </div>
   </div>
+  {% if viewing_today %}
   <p class="section-note">Today so far &mdash; a live, partial picture, not a final tally.</p>
+  {% else %}
+  <p class="section-note">{{ view_date_label }} &mdash; a complete day, not live.</p>
+  {% endif %}
 
   {% if combined_days %}
   <h2>Monday&ndash;yesterday, daily averages</h2>
@@ -168,9 +186,22 @@
 <div class="lm-panel lm-panel-interconnectors">
   <p class="section-note" style="margin:18px 0 4px;">
     Scheduled (ENTSO-E for the continental links, SEMO for the Irish ones) vs actual metered
-    flow per link, today so far (+import / &minus;export).
+    flow per link, right now (+import / &minus;export). Chart below follows the day picked below.
   </p>
-  <div class="lm-legend" style="margin:0 0 8px;">
+  {% if day_options %}
+  <div class="filters">
+    <div class="row">
+      <div class="flabel">Day</div>
+      <div class="range">
+        <a href="?day=today" class="{{ 'on' if viewing_today else '' }}">Today</a>
+        {% for d in day_options %}
+        <a href="?day={{ d.iso }}" class="{{ 'on' if day == d.iso else '' }}">{{ d.label }}</a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  <div class="lm-legend" style="margin:8px 0 8px;">
     <span><i style="background:var(--lm-violet);"></i>Actual</span>
     <span><i class="dashed"></i>Scheduled</span>
   </div>
@@ -179,8 +210,8 @@
     <div class="lm-flow">
       <div class="lm-flow-head">
         <span class="lm-flow-name">{{ ic.name }} <small>{{ ic.country }}</small></span>
-        {% if ic.cmp.latest_actual is not none %}
-        <span class="lm-flow-val">{{ ic.cmp.latest_actual|commas(0) }} MW</span>
+        {% if ic.cmp_today.latest_actual is not none %}
+        <span class="lm-flow-val">{{ ic.cmp_today.latest_actual|commas(0) }} MW</span>
         {% else %}
         <span class="lm-flow-val" style="color:var(--lm-faint);">&mdash;</span>
         {% endif %}
@@ -191,7 +222,7 @@
         ~{{ ic.active_deviation.avg_deviation_mw|commas(0) }} MW, since SP{{ ic.active_deviation.start_sp }}
       </div>
       {% endif %}
-      {% if ic.cmp_svg %}{{ ic.cmp_svg | safe }}{% else %}<div class="lm-empty">No flow data published yet today.</div>{% endif %}
+      {% if ic.cmp_svg %}{{ ic.cmp_svg | safe }}{% else %}<div class="lm-empty">No flow data for this day yet.</div>{% endif %}
     </div>
     {% endfor %}
   </div>

@@ -302,7 +302,7 @@ def test_live_market_page_empty_state_with_no_data(tmp_path):
     r = client.get("/live")
     assert r.status_code == 200
     assert "LIVE" in r.text and "MARKET" in r.text
-    assert "No wind data published yet today." in r.text
+    assert "No wind data for this day yet." in r.text
 
 
 def test_live_market_page_shows_todays_latest_value(tmp_path):
@@ -325,3 +325,64 @@ def test_live_market_nav_link_is_live(tmp_path):
     client = _client(tmp_path / "test.db")
     r = client.get("/live")
     assert 'href="/live" class="on"' in r.text
+
+
+# Fixed "today" for the day-picker tests below -- monkeypatched onto
+# routes_live's own london_today() reference so these pass regardless of
+# what real-world day the suite happens to run on (a plain date.today()/
+# london_today() call, like the KPI test above uses, would only have a
+# past day to pick from on 6 of 7 real calendar days -- Monday has none,
+# since week_so_far() is None that day by design).
+_TODAY = date(2026, 9, 17)  # a Thursday
+_YESTERDAY = date(2026, 9, 16)  # Wednesday -- the day-picker's target
+
+
+def _patch_today(monkeypatch):
+    import gbpw.web.routes_live as routes_live_module
+    monkeypatch.setattr(routes_live_module, "london_today", lambda: _TODAY)
+
+
+def test_live_market_day_picker_shows_selected_past_days_chart_data(tmp_path, monkeypatch):
+    _patch_today(monkeypatch)
+    conn = connect(tmp_path / "test.db")
+    upsert_prices(conn, [
+        PriceRow("demand", _TODAY, 1, "NA", 30000.0),
+        PriceRow("demand", _YESTERDAY, 1, "NA", 21000.0),
+    ])
+    client = _client(tmp_path / "test.db")
+
+    r_today = client.get("/live")
+    assert "30.00" in r_today.text  # today's demand KPI, GW-converted
+    assert "Actual 21000 MW" not in r_today.text  # yesterday's chart value shouldn't leak into today's view
+
+    r_past = client.get(f"/live?day={_YESTERDAY.isoformat()}")
+    assert r_past.status_code == 200
+    assert "Actual 21000 MW" in r_past.text  # the selected day's own demand chart data (chart-hit <title>)
+    assert _YESTERDAY.strftime("%a %d %b %Y") in r_past.text  # view_date_label in the chart captions
+
+
+def test_live_market_day_picker_kpi_row_stays_live_on_a_past_day(tmp_path, monkeypatch):
+    # The top KPI row is always today's state regardless of which day's
+    # charts are selected -- see routes_live.py's own module docstring.
+    _patch_today(monkeypatch)
+    conn = connect(tmp_path / "test.db")
+    upsert_prices(conn, [
+        PriceRow("demand", _TODAY, 1, "NA", 30000.0),
+        PriceRow("demand", _YESTERDAY, 1, "NA", 21000.0),
+    ])
+    client = _client(tmp_path / "test.db")
+
+    r = client.get(f"/live?day={_YESTERDAY.isoformat()}")
+    assert "30.00" in r.text  # KPI row's own value, still today's, even while viewing yesterday's charts
+
+
+def test_live_market_day_picker_invalid_value_falls_back_to_today(tmp_path, monkeypatch):
+    _patch_today(monkeypatch)
+    conn = connect(tmp_path / "test.db")
+    upsert_prices(conn, [PriceRow("demand", _TODAY, 1, "NA", 30000.0)])
+    client = _client(tmp_path / "test.db")
+
+    for bad_day in ["garbage", "2099-01-01", "2026-09-01"]:  # last two are real dates, just outside this week
+        r = client.get(f"/live?day={bad_day}")
+        assert r.status_code == 200
+        assert "30.00" in r.text  # still today's chart data, not an error or blank page
