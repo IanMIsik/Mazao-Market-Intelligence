@@ -1,6 +1,7 @@
 import sys
 import time
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -40,6 +41,7 @@ def test_start_background_refresh_skips_loop_when_lock_already_held(tmp_path, mo
 
     called = []
     monkeypatch.setattr(background_refresh, "_refresh_once", lambda p: called.append(p))
+    monkeypatch.setattr(background_refresh, "_weekly_report_once", lambda p: None)
 
     stop = background_refresh.start_background_refresh(db_path, interval_seconds=10)
     time.sleep(0.05)  # a wrongly-started thread would have called _refresh_once by now
@@ -54,6 +56,7 @@ def test_start_background_refresh_runs_loop_when_lock_free(tmp_path, monkeypatch
 
     called = []
     monkeypatch.setattr(background_refresh, "_refresh_once", lambda p: called.append(p))
+    monkeypatch.setattr(background_refresh, "_weekly_report_once", lambda p: None)
 
     stop = background_refresh.start_background_refresh(db_path, interval_seconds=10)
     time.sleep(0.05)
@@ -140,3 +143,92 @@ def test_refresh_once_only_backfills_wind_curtailment_for_incomplete_past_days(t
     assert date(2026, 9, 22) in called      # partial, backfilled
     assert date(2026, 9, 23) in called      # empty, backfilled
     assert called.count(today) == 1         # today is always re-ingested, exactly once
+
+
+LONDON = ZoneInfo("Europe/London")
+MON_0700 = datetime(2026, 10, 5, 7, 0, tzinfo=LONDON)  # week ending Sun 4 Oct is done
+
+
+def _weekly_setup(monkeypatch, tmp_path):
+    monkeypatch.setattr(background_refresh, "_weekly_last_attempt", None)
+    calls = {"ingest": [], "build": [], "publish": []}
+    monkeypatch.setattr(background_refresh, "ingest_week_parallel", lambda db, dates: calls["ingest"].append(dates))
+
+    def fake_build(conn, we, out_path, **k):
+        calls["build"].append((we, out_path))
+        conn.execute("INSERT INTO reports(week_ending, facts_json, narrative, run_basis, built_at, published) VALUES (?, '{}', '', '', 'x', 0)", (we.isoformat(),))
+        conn.commit()
+
+    monkeypatch.setattr(background_refresh, "build_report", fake_build)
+    real_publish = background_refresh.publish_report
+    monkeypatch.setattr(background_refresh, "publish_report", lambda conn, we: calls["publish"].append(we) or real_publish(conn, we))
+    return tmp_path / "data" / "gbpw.db", calls
+
+
+def test_weekly_report_builds_and_publishes_last_completed_week(tmp_path, monkeypatch):
+    db_path, calls = _weekly_setup(monkeypatch, tmp_path)
+
+    background_refresh._weekly_report_once(db_path, now=MON_0700)
+
+    assert calls["build"] == [(date(2026, 10, 4), tmp_path / "out" / "gbpw-2026-10-04.html")]
+    assert calls["publish"] == [date(2026, 10, 4)]
+    assert calls["ingest"][0][-1] == date(2026, 10, 4)
+
+
+def test_weekly_report_waits_until_monday_morning(tmp_path, monkeypatch):
+    db_path, calls = _weekly_setup(monkeypatch, tmp_path)
+
+    # Monday 05:59 London: the week ending 4 Oct isn't ready yet.
+    background_refresh._weekly_report_once(db_path, now=datetime(2026, 10, 5, 5, 59, tzinfo=LONDON))
+
+    assert all(we != date(2026, 10, 4) for we, _ in calls["build"])
+
+
+def test_weekly_report_catches_up_on_a_later_day(tmp_path, monkeypatch):
+    # Server was down Monday; it comes back Thursday and still builds it.
+    db_path, calls = _weekly_setup(monkeypatch, tmp_path)
+
+    background_refresh._weekly_report_once(db_path, now=datetime(2026, 10, 8, 14, 0, tzinfo=LONDON))
+
+    assert calls["publish"] == [date(2026, 10, 4)]
+
+
+def test_weekly_report_does_nothing_when_already_published(tmp_path, monkeypatch):
+    db_path, calls = _weekly_setup(monkeypatch, tmp_path)
+    background_refresh._weekly_report_once(db_path, now=MON_0700)
+    monkeypatch.setattr(background_refresh, "_weekly_last_attempt", None)
+    for k in calls:
+        calls[k].clear()
+
+    background_refresh._weekly_report_once(db_path, now=MON_0700)
+
+    assert calls == {"ingest": [], "build": [], "publish": []}
+
+
+def test_weekly_report_publishes_a_built_but_unpublished_report_without_rebuilding(tmp_path, monkeypatch):
+    db_path, calls = _weekly_setup(monkeypatch, tmp_path)
+    conn = gbpw_connect(db_path)
+    conn.execute("INSERT INTO reports(week_ending, facts_json, narrative, run_basis, built_at, published) VALUES ('2026-10-04', '{}', '', '', 'x', 0)")
+    conn.commit()
+    conn.close()
+
+    background_refresh._weekly_report_once(db_path, now=MON_0700)
+
+    assert calls["build"] == [] and calls["ingest"] == []
+    assert calls["publish"] == [date(2026, 10, 4)]
+
+
+def test_weekly_report_incomplete_week_is_not_published_and_retry_is_throttled(tmp_path, monkeypatch):
+    db_path, calls = _weekly_setup(monkeypatch, tmp_path)
+
+    def failing_build(conn, we, out_path, **k):
+        calls["build"].append(we)
+        raise background_refresh.IncompleteWeekError("missing periods")
+
+    monkeypatch.setattr(background_refresh, "build_report", failing_build)
+
+    background_refresh._weekly_report_once(db_path, now=MON_0700)
+    background_refresh._weekly_report_once(db_path, now=MON_0700)  # next 5-min cycle
+
+    assert calls["publish"] == []
+    assert len(calls["build"]) == 1  # second cycle skipped by the retry throttle

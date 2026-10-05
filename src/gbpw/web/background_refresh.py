@@ -19,10 +19,13 @@ from __future__ import annotations
 import logging
 import sys
 import threading
-from datetime import timedelta
+import time
+from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import IO
+from zoneinfo import ZoneInfo
 
+from ..build import build_report, publish_report
 from ..ingest import (
     ingest_bm_cashflows_range_parallel,
     ingest_bmu_reference,
@@ -34,15 +37,22 @@ from ..ingest import (
     ingest_imrp,
     ingest_interconnector_scheduled,
     ingest_week_parallel,
+    history_range,
     ingest_wind_curtailment,
 )
-from ..settlement import london_today, periods_in_date
-from ..storage import connect
+from ..metrics import IncompleteWeekError
+from ..settlement import london_today, most_recent_sunday, periods_in_date
+from ..storage import connect, get_report
 
 logger = logging.getLogger("gbpw.web.background_refresh")
 
 DEFAULT_INTERVAL_SECONDS = 300  # 5 minutes, per direct request -- matches both pages' own meta refresh
 TRAILING_WINDOW_DAYS = 3  # EAC/BM data for the last few days can still be revised
+WEEKLY_REPORT_HISTORY_DAYS = 37  # same default as `gbpw run --history-days`
+WEEKLY_REPORT_READY_HOUR = 6  # London time on the Monday after the week ends -- same moment the old cron fired
+WEEKLY_REPORT_RETRY_SECONDS = 3600  # a failed attempt (incomplete data) re-runs a 37-day ingest, so don't retry every 5 minutes
+
+_weekly_last_attempt: float | None = None
 
 
 def _refresh_once(db_path: Path) -> None:
@@ -154,6 +164,47 @@ def _refresh_once(db_path: Path) -> None:
     )
 
 
+def _weekly_report_once(db_path: Path, now: datetime | None = None) -> None:
+    """Builds and publishes the most recently completed week's GB Power
+    Weekly report if it isn't published yet -- the in-process replacement
+    for the Monday-06:00 host cron (deploy/weekly-cron.sh), which was
+    fragile (a `%` in the crontab line silently broke it) and invisible
+    from the app. Level-triggered rather than clock-triggered: it asks
+    "is last week's report missing?" every cycle, so a server that was
+    down on Monday morning catches up on its next start instead of
+    skipping the week.
+    """
+    global _weekly_last_attempt
+    now = now or datetime.now(ZoneInfo("Europe/London"))
+    week_ending = most_recent_sunday(now.date() - timedelta(days=1))  # last *completed* Sunday
+    ready_at = datetime.combine(week_ending + timedelta(days=1), dtime(WEEKLY_REPORT_READY_HOUR), tzinfo=now.tzinfo)
+    if now < ready_at:
+        return
+
+    conn = connect(db_path)
+    try:
+        report = get_report(conn, week_ending)
+        if report and report["published"]:
+            return
+        if _weekly_last_attempt is not None and time.monotonic() - _weekly_last_attempt < WEEKLY_REPORT_RETRY_SECONDS:
+            return
+        _weekly_last_attempt = time.monotonic()
+
+        if report is None:
+            logger.info("weekly report: building week ending %s", week_ending)
+            ingest_week_parallel(db_path, history_range(week_ending, WEEKLY_REPORT_HISTORY_DAYS))
+            out_path = db_path.parent.parent / "out" / f"gbpw-{week_ending.isoformat()}.html"
+            try:
+                build_report(conn, week_ending, out_path)
+            except IncompleteWeekError as e:
+                logger.warning("weekly report: week ending %s incomplete, will retry later: %s", week_ending, e)
+                return
+        if publish_report(conn, week_ending):
+            logger.info("weekly report: published week ending %s", week_ending)
+    finally:
+        conn.close()
+
+
 # Kept alive for the process's whole lifetime -- closing or garbage-
 # collecting the handle releases the OS lock it holds (see
 # _try_acquire_singleton_lock()). Only ever meaningfully non-None in one
@@ -233,6 +284,10 @@ def start_background_refresh(db_path: Path, interval_seconds: int = DEFAULT_INTE
                 _refresh_once(db_path)
             except Exception:  # noqa: BLE001 -- a bad refresh cycle must not kill the loop
                 logger.exception("background refresh cycle failed, will retry next interval")
+            try:
+                _weekly_report_once(db_path)
+            except Exception:  # noqa: BLE001 -- independent of the refresh above, and vice versa
+                logger.exception("weekly report cycle failed, will retry later")
             if stop.wait(interval_seconds):
                 break
 

@@ -187,24 +187,20 @@ Then point a reverse proxy (nginx, Caddy, etc.) at `127.0.0.1:5000` for
 TLS and the public domain — do not expose uvicorn directly to the
 internet without one.
 
-**Scheduled report builds**: if you want GB Power Weekly to rebuild
-itself automatically (rather than running `gbpw run` by hand), add a cron
-job or systemd timer calling `gbpw run` on whatever cadence you want new
-weekly reports — `scripts/run_weekly.ps1` is the existing Windows/
-Task Scheduler equivalent of this. `gbpw run` only *builds* a report; it
-does not publish it (see `routes_gbpw.py`, which skips any report where
-`published=0`) — a scheduled job needs to call `gbpw publish
---week-ending <date>` too, or the new report builds silently and never
-appears on the site.
+**Scheduled report builds**: the running web app does this itself — no
+cron job needed. Its background refresh loop (`web/background_refresh.py`)
+checks every cycle whether the most recently completed week's GB Power
+Weekly report is published, and if not (from Monday 06:00 London time
+onward) ingests the week, builds the report and publishes it. It is
+level-triggered, so a server that was down on Monday catches up on its
+next start; an incomplete week is retried hourly. Progress is logged as
+`weekly report: ...` lines in the app's log (`docker compose logs gbpw`).
 
-For the Docker deployment (`deploy/setup.sh`), `deploy/weekly-cron.sh`
-installs exactly this as a cron job — builds and publishes the
-just-completed week, every Monday at 06:00 UTC, run inside the app
-container:
+For a manual or one-off build, `gbpw run --week-ending <sunday>` then
+`gbpw publish --week-ending <sunday>` (`run` only builds; `routes_gbpw.py`
+skips any report with `published=0`). `scripts/run_weekly.ps1` is the
+Windows/Task Scheduler equivalent for a non-server setup.
 
-```bash
-bash deploy/weekly-cron.sh
-```
-
-Idempotent (re-running it replaces its own crontab entry rather than
-duplicating it). Logs to `~/gbpw-weekly.log`.
+`deploy/weekly-cron.sh` is the older host-cron approach and is no longer
+needed on the Docker deployment; if it was installed, remove it with
+`crontab -l | grep -v gbpw-weekly-report | crontab -`.
