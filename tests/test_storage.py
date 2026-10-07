@@ -139,3 +139,27 @@ def test_latest_fetch_ts_returns_the_max_across_all_series(tmp_path):
     conn.commit()
 
     assert latest_fetch_ts(conn) == "2026-09-17T10:05:00+00:00"
+
+
+def test_upsert_prices_and_bm_cashflows_skip_unchanged_rows_but_apply_changes(tmp_path):
+    # The 5-minute refresh re-fetches whole windows; an unchanged row must
+    # not be rewritten (that write amplification made the live server's
+    # disk the bottleneck), but a revised value must still land.
+    from gbpw.storage import BmCashflowRow, PriceRow, upsert_bm_cashflows, upsert_prices
+
+    conn = connect(tmp_path / "t.db")
+    d = date(2026, 1, 1)
+
+    upsert_prices(conn, [PriceRow("x", d, 1, "NA", 1.0)])
+    before = conn.total_changes
+    upsert_prices(conn, [PriceRow("x", d, 1, "NA", 1.0)])
+    assert conn.total_changes == before
+    upsert_prices(conn, [PriceRow("x", d, 1, "NA", 2.0)])
+    assert conn.execute("SELECT value FROM prices").fetchone()[0] == 2.0
+
+    upsert_bm_cashflows(conn, [BmCashflowRow(d, 1, "U-1", "bid", 5.0)])
+    before = conn.total_changes
+    upsert_bm_cashflows(conn, [BmCashflowRow(d, 1, "U-1", "bid", 5.0)])
+    assert conn.total_changes == before
+    upsert_bm_cashflows(conn, [BmCashflowRow(d, 1, "U-1", "bid", 6.0)])
+    assert conn.execute("SELECT total_cashflow FROM bm_cashflows").fetchone()[0] == 6.0

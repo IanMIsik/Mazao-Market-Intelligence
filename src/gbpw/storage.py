@@ -413,6 +413,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+# The three big upserts below (prices, eac_results, bm_cashflows) only
+# rewrite a row when its data actually changed. The 5-minute background
+# refresh re-fetches whole windows (the full ~180k-row IMRP table, the
+# whole Monday..today week, 4 days of EAC/BM) and used to rewrite every
+# row every cycle just to bump fetched_at -- tens of MB of WAL + page
+# writes per cycle, ~50 GB in 12 days on the live server, enough to
+# exhaust a small EBS volume's I/O burst and make every page slow.
+# fetched_at therefore means "when this value was last written/changed";
+# nothing reads it.
 def upsert_prices(conn: sqlite3.Connection, rows: Iterable[PriceRow], fetched_at: datetime | None = None) -> int:
     fetched_at = fetched_at or datetime.now(timezone.utc)
     ts = fetched_at.isoformat()
@@ -424,6 +433,7 @@ def upsert_prices(conn: sqlite3.Connection, rows: Iterable[PriceRow], fetched_at
         ON CONFLICT (series, sd, sp, run) DO UPDATE SET
             value = excluded.value,
             fetched_at = excluded.fetched_at
+        WHERE prices.value IS NOT excluded.value
         """,
         data,
     )
@@ -463,6 +473,11 @@ def upsert_eac_results(conn: sqlite3.Connection, rows: Iterable[EacRow], fetched
             delivery_end = excluded.delivery_end,
             post_code = excluded.post_code,
             fetched_at = excluded.fetched_at
+        WHERE eac_results.executed_quantity IS NOT excluded.executed_quantity
+           OR eac_results.clearing_price IS NOT excluded.clearing_price
+           OR eac_results.participant IS NOT excluded.participant
+           OR eac_results.auction_unit IS NOT excluded.auction_unit
+           OR eac_results.technology_type IS NOT excluded.technology_type
         """,
         data,
     )
@@ -553,6 +568,7 @@ def upsert_bm_cashflows(
         ON CONFLICT (sd, sp, national_grid_bm_unit, bid_offer) DO UPDATE SET
             total_cashflow = excluded.total_cashflow,
             fetched_at = excluded.fetched_at
+        WHERE bm_cashflows.total_cashflow IS NOT excluded.total_cashflow
         """,
         data,
     )
