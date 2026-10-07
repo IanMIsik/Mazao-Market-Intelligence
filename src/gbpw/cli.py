@@ -13,6 +13,7 @@ Command-line entry point tying ingest / narrative / render / publish together.
     gbpw ingest-cfd-auctions
     gbpw ingest-desnz-prices
     gbpw ingest-gdp-deflator
+    gbpw prune-forecasts [--vacuum]
 
 `run` is the one-shot form meant for a scheduler: ingest the trailing window
 then build, writing to <out-dir>/gbpw-<week-ending>.html. `--week-ending auto`
@@ -79,7 +80,7 @@ from .ingest import (
 )
 from .metrics import IncompleteWeekError, build_week
 from .settlement import most_recent_sunday as _most_recent_sunday
-from .storage import DEFAULT_DB_PATH, connect, get_report, upsert_bm_unit_reference
+from .storage import DEFAULT_DB_PATH, connect, get_report, prune_superseded_runs, upsert_bm_unit_reference
 
 logger = logging.getLogger("gbpw.cli")
 
@@ -215,6 +216,13 @@ def main(argv: list[str] | None = None) -> None:
         help="fetch and store HM Treasury's GDP deflator, used to rebase the PPA Tools long-term price chart -- run when Treasury publishes a new release, not on a schedule",
     )
     p_deflator.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+
+    p_prune = sub.add_parser(
+        "prune-forecasts",
+        help="delete forecast rows superseded by a later run (the app only reads the newest run); the live app also does this for recent days every cycle",
+    )
+    p_prune.add_argument("--vacuum", action="store_true", help="afterwards VACUUM to shrink the file (slow; blocks writers; needs free disk ~= db size)")
+    p_prune.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
     p_run = sub.add_parser("run", help="ingest + build in one step, for a scheduler")
     p_run.add_argument("--week-ending", type=_week_ending_or_auto, default="auto")
@@ -353,6 +361,15 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(1)
         count = conn.execute("SELECT COUNT(*) FROM gdp_deflator").fetchone()[0]
         print(f"Done. {count:,} year(s) on file.")
+
+    elif args.command == "prune-forecasts":
+        print("Pruning superseded forecast runs (this can take several minutes the first time)...")
+        n = prune_superseded_runs(conn)
+        print(f"Deleted {n:,} superseded row(s).")
+        if args.vacuum:
+            print("Vacuuming...")
+            conn.execute("VACUUM")
+            print("Done.")
 
     elif args.command == "status":
         healthy = _print_status(conn, args.week_ending, args.history_days)

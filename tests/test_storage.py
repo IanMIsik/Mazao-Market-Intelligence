@@ -181,3 +181,22 @@ def test_series_for_week_returns_latest_run_per_period_and_distinct_periods_coun
     assert got == {("2026-01-01", 1): 9.0, ("2026-01-01", 2): 9.0, ("2026-01-01", 3): 1.0, ("2026-01-02", 5): 4.0}
     assert distinct_periods(conn, "f", d) == 3
     assert distinct_periods(conn, "f", date(2026, 1, 3)) == 0
+
+
+def test_prune_superseded_runs_keeps_newest_run_per_period_and_only_touches_forecast_series(tmp_path):
+    from gbpw.storage import PriceRow, prune_superseded_runs, series_for_week, upsert_prices
+
+    conn = connect(tmp_path / "t.db")
+    d = date(2026, 1, 1)
+    upsert_prices(conn, [PriceRow("solar_forecast", d, sp, "2026-01-01T00:00", 1.0) for sp in (1, 2, 3)])
+    upsert_prices(conn, [PriceRow("solar_forecast", d, sp, "2026-01-01T06:00", 9.0) for sp in (1, 2)])
+    # Not a forecast series: multiple runs are real history there and must survive.
+    upsert_prices(conn, [PriceRow("imbalance", d, 1, "II", 1.0), PriceRow("imbalance", d, 1, "SF", 2.0)])
+    before = series_for_week(conn, "solar_forecast", [d])
+
+    deleted = prune_superseded_runs(conn)
+
+    assert deleted == 2  # the two replaced 00:00 rows; period 3's only run stays
+    assert series_for_week(conn, "solar_forecast", [d]) == before
+    assert conn.execute("SELECT COUNT(*) FROM prices WHERE series = 'imbalance'").fetchone()[0] == 2
+    assert prune_superseded_runs(conn) == 0  # idempotent

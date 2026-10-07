@@ -42,7 +42,7 @@ from ..ingest import (
 )
 from ..metrics import IncompleteWeekError
 from ..settlement import london_today, most_recent_sunday, periods_in_date
-from ..storage import connect, get_report
+from ..storage import connect, get_report, prune_superseded_runs
 
 logger = logging.getLogger("gbpw.web.background_refresh")
 
@@ -156,6 +156,11 @@ def _refresh_once(db_path: Path) -> None:
         # -- see ingest_forecast_medium_term()'s own docstring for why this
         # is four separate fetches, not folded into the block above.
         ingest_forecast_medium_term(conn, today)
+        # Each cycle above appends a new run of every forecast series; drop
+        # the runs it just superseded so the table doesn't grow forever.
+        # Recent days only -- cheap, since earlier cycles already pruned
+        # everything older (`gbpw prune-forecasts` does the one-off backlog).
+        prune_superseded_runs(conn, sd_from=today - timedelta(days=TRAILING_WINDOW_DAYS))
     finally:
         conn.close()
     logger.info(

@@ -781,6 +781,55 @@ def series_for_week(
     return out
 
 
+# Forecast series store one row per period *per run* (run = publish/fetch
+# time), so every refresh cycle appends a fresh copy of the window. The app
+# only ever reads the newest run per (sd, sp) (series_for_week), so older
+# runs are dead weight -- ~190k rows/day that bloated the database to GBs.
+FORECAST_SERIES = (
+    "demand_forecast",
+    "wind_forecast",
+    "solar_forecast",
+    "wind_embedded_forecast",
+    "demand_forecast_14d",
+    "nuclear_forecast_14d",
+    "wind_forecast_14d",
+)
+
+
+def prune_superseded_runs(
+    conn: sqlite3.Connection,
+    series: Iterable[str] = FORECAST_SERIES,
+    sd_from: date | None = None,
+) -> int:
+    """Deletes every forecast row that a later run has replaced for the same
+    (series, sd, sp). Lossless for the app: series_for_week() only returns
+    the newest run. One commit per (series, sd) keeps the write-ahead log
+    small on a big first-time prune. Returns the number of rows deleted.
+    """
+    deleted = 0
+    for name in series:
+        query = "SELECT DISTINCT sd FROM prices WHERE series = ?"
+        params: list = [name]
+        if sd_from is not None:
+            query += " AND sd >= ?"
+            params.append(sd_from.isoformat())
+        for (sd,) in conn.execute(query, params).fetchall():
+            cur = conn.execute(
+                """
+                DELETE FROM prices
+                WHERE series = ? AND sd = ?
+                AND run < (
+                    SELECT MAX(p2.run) FROM prices p2
+                    WHERE p2.series = prices.series AND p2.sd = prices.sd AND p2.sp = prices.sp
+                )
+                """,
+                (name, sd),
+            )
+            conn.commit()
+            deleted += cur.rowcount
+    return deleted
+
+
 def upsert_report(
     conn: sqlite3.Connection,
     week_ending: date,
