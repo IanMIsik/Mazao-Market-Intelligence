@@ -163,3 +163,21 @@ def test_upsert_prices_and_bm_cashflows_skip_unchanged_rows_but_apply_changes(tm
     assert conn.total_changes == before
     upsert_bm_cashflows(conn, [BmCashflowRow(d, 1, "U-1", "bid", 6.0)])
     assert conn.execute("SELECT total_cashflow FROM bm_cashflows").fetchone()[0] == 6.0
+
+
+def test_series_for_week_returns_latest_run_per_period_and_distinct_periods_counts_once(tmp_path):
+    from gbpw.storage import PriceRow, distinct_periods, series_for_week, upsert_prices
+
+    conn = connect(tmp_path / "t.db")
+    d, other = date(2026, 1, 1), date(2026, 1, 2)
+    upsert_prices(conn, [PriceRow("f", d, sp, "2026-01-01T00:00", 1.0) for sp in (1, 2, 3)])
+    # A later run revises periods 1-2 only; period 3 must keep its older run's value.
+    upsert_prices(conn, [PriceRow("f", d, sp, "2026-01-01T06:00", 9.0) for sp in (1, 2)])
+    upsert_prices(conn, [PriceRow("f", other, 5, "2026-01-01T00:00", 4.0)])
+    upsert_prices(conn, [PriceRow("g", d, 1, "NA", 7.0)])
+
+    got = series_for_week(conn, "f", [d, other, date(2026, 1, 3)])
+
+    assert got == {("2026-01-01", 1): 9.0, ("2026-01-01", 2): 9.0, ("2026-01-01", 3): 1.0, ("2026-01-02", 5): 4.0}
+    assert distinct_periods(conn, "f", d) == 3
+    assert distinct_periods(conn, "f", date(2026, 1, 3)) == 0

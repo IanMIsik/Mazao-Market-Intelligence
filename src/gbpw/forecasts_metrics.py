@@ -42,6 +42,7 @@ from datetime import date, timedelta
 
 from .live_market_metrics import today_progression
 from .settlement import periods_in_date
+from .storage import distinct_periods
 
 
 def forecast_window_days(today: date) -> list[date]:
@@ -97,9 +98,7 @@ def _day1_demand_series(conn: sqlite3.Connection, day1: date) -> str:
     count for that date reaches a full day -- direct request: prefer
     Elexon, only fall back while it's genuinely incomplete.
     """
-    elexon_periods = conn.execute(
-        "SELECT COUNT(DISTINCT sp) FROM prices WHERE series='demand_forecast' AND sd=?", (day1.isoformat(),)
-    ).fetchone()[0]
+    elexon_periods = distinct_periods(conn, "demand_forecast", day1)
     return "demand_forecast" if elexon_periods >= periods_in_date(day1) else "demand_forecast_14d"
 
 

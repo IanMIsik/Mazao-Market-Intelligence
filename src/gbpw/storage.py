@@ -729,6 +729,29 @@ def log_fetch(conn: sqlite3.Connection, series: str, sd: date, ok: bool, note: s
     conn.commit()
 
 
+# Walks the distinct `sp` values of one (series, sd) with index seeks (a
+# "loose index scan") instead of reading every row. Several forecast series
+# keep one row per settlement period *per run* (run = fetch timestamp, a new
+# one every 5-minute refresh), so a (series, sd) can hold tens of thousands
+# of rows; touching them all made every page slower each day. Cost here is
+# ~2 seeks per period no matter how many runs are stored.
+_SKIP_SCAN_SPS = """
+    WITH RECURSIVE sps(sp) AS (
+        SELECT MIN(sp) FROM prices WHERE series = ?1 AND sd = ?2
+        UNION ALL
+        SELECT (SELECT MIN(sp) FROM prices WHERE series = ?1 AND sd = ?2 AND sp > sps.sp)
+        FROM sps WHERE sp IS NOT NULL
+    )
+"""
+
+
+def distinct_periods(conn: sqlite3.Connection, series: str, sd: date) -> int:
+    """Number of distinct settlement periods stored for (series, sd), across all runs."""
+    return conn.execute(
+        _SKIP_SCAN_SPS + "SELECT COUNT(*) FROM sps WHERE sp IS NOT NULL", (series, sd.isoformat())
+    ).fetchone()[0]
+
+
 def series_for_week(
     conn: sqlite3.Connection, series: str, week_dates: list[date], run: str | None = None
 ) -> dict[tuple[str, int], float]:
@@ -739,19 +762,23 @@ def series_for_week(
     one row per period (see module docstring) so this is also a no-op, but
     the query is written to do the right thing if that ever changes.
     """
-    sd_list = [d.isoformat() for d in week_dates]
-    placeholders = ",".join("?" for _ in sd_list)
-    query = f"""
-        SELECT sd, sp, value FROM prices
-        WHERE series = ? AND sd IN ({placeholders})
-        AND run = (
-            SELECT p2.run FROM prices p2
-            WHERE p2.series = prices.series AND p2.sd = prices.sd AND p2.sp = prices.sp
-            ORDER BY p2.run DESC LIMIT 1
-        )
-    """
-    rows = conn.execute(query, [series, *sd_list]).fetchall()
-    return {(sd, sp): value for sd, sp, value in rows}
+    out: dict[tuple[str, int], float] = {}
+    for d in week_dates:
+        sd = d.isoformat()
+        rows = conn.execute(
+            _SKIP_SCAN_SPS
+            + """
+            SELECT sp, (
+                SELECT value FROM prices
+                WHERE series = ?1 AND sd = ?2 AND sp = sps.sp
+                ORDER BY run DESC LIMIT 1
+            ) FROM sps WHERE sp IS NOT NULL
+            """,
+            (series, sd),
+        ).fetchall()
+        for sp, value in rows:
+            out[(sd, sp)] = value
+    return out
 
 
 def upsert_report(
