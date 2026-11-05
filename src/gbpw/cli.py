@@ -17,6 +17,7 @@ Command-line entry point tying ingest / narrative / render / publish together.
     gbpw create-user --email a@b.com [--password-stdin]   (also resets a password)
     gbpw delete-user --email a@b.com
     gbpw list-users
+    gbpw test-alert      (sends a test email using the ALERT_EMAIL_TO / SMTP_* settings)
 
 `run` is the one-shot form meant for a scheduler: ingest the trailing window
 then build, writing to <out-dir>/gbpw-<week-ending>.html. `--week-ending auto`
@@ -237,6 +238,8 @@ def main(argv: list[str] | None = None) -> None:
     p_luser = sub.add_parser("list-users", help="list sign-in accounts")
     p_luser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
+    sub.add_parser("test-alert", help="send a test alert email using the ALERT_EMAIL_TO / SMTP_* environment settings")
+
     p_run = sub.add_parser("run", help="ingest + build in one step, for a scheduler")
     p_run.add_argument("--week-ending", type=_week_ending_or_auto, default="auto")
     p_run.add_argument("--out-dir", type=Path, default=Path("out"))
@@ -415,6 +418,16 @@ def main(argv: list[str] | None = None) -> None:
         for email, created in rows:
             print(f"{email}  (created {created[:10]})")
         print(f"{len(rows)} user(s).")
+
+    elif args.command == "test-alert":
+        from .web import alerts
+
+        if alerts._smtp_settings() is None:
+            print("Not configured: set ALERT_EMAIL_TO and SMTP_HOST (plus SMTP_USER / SMTP_PASSWORD) first.")
+            sys.exit(1)
+        ok = alerts.send_email("[Mazao] Test alert", "This is a test of the Mazao alert emails. If you can read this, alerts work.")
+        print("Test email sent." if ok else "Sending failed -- see the error above.")
+        sys.exit(0 if ok else 1)
 
     elif args.command == "status":
         healthy = _print_status(conn, args.week_ending, args.history_days)

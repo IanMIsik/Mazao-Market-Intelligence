@@ -20,7 +20,7 @@ import logging
 import sys
 import threading
 import time
-from datetime import datetime, time as dtime, timedelta
+from datetime import datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from typing import IO
 from zoneinfo import ZoneInfo
@@ -43,6 +43,7 @@ from ..ingest import (
 from ..metrics import IncompleteWeekError
 from ..settlement import london_today, most_recent_sunday, periods_in_date
 from ..storage import connect, get_report, prune_superseded_runs
+from . import alerts
 
 logger = logging.getLogger("gbpw.web.background_refresh")
 
@@ -60,10 +61,24 @@ WEEKLY_INGEST_CHUNK_DAYS = 7
 # takes this lock one 7-day chunk at a time, so the live refresh waits at most one chunk.
 _ingest_lock = threading.Lock()
 
+# Read by web/alerts.py's watchdog, which emails when the refresh goes quiet. last_ok is when a
+# cycle last *finished successfully* (None until the first one); cycle_started is set while one
+# is running; last_error is the most recent failure.
+refresh_health: dict = {"last_ok": None, "last_error": None, "cycle_started": None}
+
 
 def _refresh_once(db_path: Path) -> None:
     with _ingest_lock:
-        _refresh_body(db_path)
+        refresh_health["cycle_started"] = datetime.now(timezone.utc)
+        try:
+            _refresh_body(db_path)
+        except Exception as e:  # noqa: BLE001 -- recorded for the alert watchdog, then re-raised to the loop
+            refresh_health["last_error"] = f"{type(e).__name__}: {e}"
+            refresh_health["cycle_started"] = None
+            raise
+        refresh_health["last_ok"] = datetime.now(timezone.utc)
+        refresh_health["last_error"] = None
+        refresh_health["cycle_started"] = None
 
 
 def _refresh_body(db_path: Path) -> None:
@@ -319,4 +334,5 @@ def start_background_refresh(db_path: Path, interval_seconds: int = DEFAULT_INTE
 
     threading.Thread(target=_loop, name="bess-background-refresh", daemon=True).start()
     threading.Thread(target=_weekly_loop, name="weekly-report", daemon=True).start()
+    alerts.start_watchdog(db_path, stop, refresh_health)
     return stop

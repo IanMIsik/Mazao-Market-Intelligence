@@ -235,3 +235,24 @@ It installs the Nginx rules, then builds and starts the `risk` container (compos
 127.0.0.1:8020, data in `./risk-data`). Copy the collected `prices.db` into `./risk-data/` before first use:
 collected prices cannot be rebuilt from the seed. After a deploy, restart it with
 `sudo docker compose --profile risk up -d --build`.
+
+## Alert emails
+
+A watchdog thread (`web/alerts.py`) emails when something is wrong: the 5-minute refresh has not completed for
+20 minutes (hung or failing), generation data is over 90 minutes old, last week's report is still unpublished 24 hours
+after it was due, or free disk is under 1.5 GB. One email when an issue starts, a reminder every 6 hours while it
+lasts, and one "resolved" email. It runs in its own thread so it still fires when the refresh itself is hung.
+
+Configure it in the `.env` file next to `docker-compose.yml` on the server (nothing goes in git); unset means issues are only logged:
+
+```
+ALERT_EMAIL_TO=you@example.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=you@gmail.com
+SMTP_PASSWORD=<an app password, not the account password>
+```
+
+Then `sudo docker compose up -d` and check it with `sudo docker compose exec gbpw gbpw test-alert`.
+It cannot report the whole server or container being down (it would be down too): add an outside uptime
+monitor on the site URL for that.

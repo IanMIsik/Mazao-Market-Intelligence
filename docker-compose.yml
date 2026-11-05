@@ -21,6 +21,13 @@ services:
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ENTSOE_KEY=${ENTSOE_KEY:-}
+      # Alert emails (web/alerts.py): set these in the .env file next to this one. Unset = no emails.
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
     restart: unless-stopped
 
   # Portfolio Risk KPI, served at /risk/ behind the sign-in page (see deploy/enable-risk.sh and
