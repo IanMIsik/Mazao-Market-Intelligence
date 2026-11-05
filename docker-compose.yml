@@ -23,6 +23,8 @@ services:
       - ENTSOE_KEY=${ENTSOE_KEY:-}
       # Always-admin accounts (comma-separated emails): /admin/users access even if the database flag is lost.
       - ADMIN_EMAILS=${ADMIN_EMAILS:-}
+      # The alert watchdog also checks the Portfolio Risk KPI container (service `risk`). Empty = skip.
+      - KPI_STATUS_URL=${KPI_STATUS_URL:-http://risk:8020/api/prices/status}
       # Alert emails (web/alerts.py): set these in the .env file next to this one. Unset = no emails.
       - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-}
       - SMTP_HOST=${SMTP_HOST:-}

@@ -117,3 +117,66 @@ def test_without_configuration_nothing_is_sent(monkeypatch):
     for k in ("ALERT_EMAIL_TO", "SMTP_HOST"):
         monkeypatch.delenv(k, raising=False)
     assert alerts.send_email("s", "b") is False
+
+
+# ---- Portfolio Risk KPI tool checks -------------------------------------------------
+
+def _status(last_ok, enabled=True, result="ok: 0 new or changed"):
+    return {"scheduler": {"enabled": enabled, "jobs": [{"job": "purely", "last_ok": last_ok, "last_result": result}]}}
+
+
+@pytest.fixture
+def kpi(monkeypatch):
+    monkeypatch.setattr(alerts, "_kpi_first_failure", None)
+    return alerts.check_kpi
+
+
+def test_kpi_check_is_skipped_when_no_url_is_configured(kpi):
+    assert kpi(None, NOW, fetch=lambda u: 1 / 0) == {}
+
+
+def test_kpi_container_not_answering_alerts_only_after_five_minutes_and_clears_on_recovery(kpi):
+    def down(url):
+        raise OSError("connection refused")
+
+    assert kpi("http://risk/", NOW, fetch=down) == {}                                  # a rebuild takes ~1 min: no alarm yet
+    assert kpi("http://risk/", NOW + timedelta(minutes=4), fetch=down) == {}
+    issues = kpi("http://risk/", NOW + timedelta(minutes=6), fetch=down)
+    assert "kpi_down" in issues and "connection refused" in issues["kpi_down"]
+    healthy = _status("2026-11-05T19:05:00Z")
+    assert kpi("http://risk/", NOW + timedelta(minutes=8), fetch=lambda u: healthy) == {}
+    assert alerts._kpi_first_failure is None                                           # recovery resets the clock
+
+
+def test_a_missed_daily_price_collection_is_reported_with_the_last_result(kpi):
+    # Thu 5 Nov 2026 23:00 UTC = 23:00 UK: the 19:00 run is over 3 hours old.
+    now = datetime(2026, 11, 5, 23, 0, tzinfo=timezone.utc)
+    stale = _status("2026-11-04T19:05:00Z", result="failed: HTTP 503")
+    issues = kpi("http://risk/", now, fetch=lambda u: stale)
+    assert "kpi_prices_missed" in issues and "HTTP 503" in issues["kpi_prices_missed"] and "Wed 04 Nov" in issues["kpi_prices_missed"]
+    fresh = _status("2026-11-05T19:05:00Z")
+    assert kpi("http://risk/", now, fetch=lambda u: fresh) == {}
+
+
+def test_price_collection_gets_three_hours_grace_and_weekends_do_not_count(kpi):
+    # Thu 20:00 UK: today's run is only an hour old, so yesterday's success is still the expectation.
+    thu_evening = datetime(2026, 11, 5, 20, 0, tzinfo=timezone.utc)
+    assert kpi("http://risk/", thu_evening, fetch=lambda u: _status("2026-11-04T19:05:00Z")) == {}
+    # Sunday: nothing is scheduled at weekends; Friday's run is the one that counts.
+    sunday = datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc)
+    assert kpi("http://risk/", sunday, fetch=lambda u: _status("2026-11-06T19:05:00Z")) == {}
+    assert "kpi_prices_missed" in kpi("http://risk/", sunday, fetch=lambda u: _status("2026-11-05T19:05:00Z"))
+
+
+def test_a_disabled_scheduler_is_not_reported_as_missed_runs(kpi):
+    assert kpi("http://risk/", NOW, fetch=lambda u: _status(None, enabled=False)) == {}
+
+
+def test_check_all_includes_the_kpi_issues(tmp_path, kpi):
+    def down(url):
+        raise OSError("refused")
+
+    db = _db_with_fresh_fuelinst(tmp_path)
+    alerts.check_all(db, FRESH, NOW, kpi_url="http://risk/")  # starts the outage clock
+    issues = alerts.check_all(db, FRESH, NOW + timedelta(minutes=10), kpi_url="http://nowhere.invalid:1/")
+    assert "kpi_down" in issues

@@ -240,19 +240,21 @@ collected prices cannot be rebuilt from the seed. After a deploy, restart it wit
 
 A watchdog thread (`web/alerts.py`) emails when something is wrong: the 5-minute refresh has not completed for
 20 minutes (hung or failing), generation data is over 90 minutes old, last week's report is still unpublished 24 hours
-after it was due, or free disk is under 1.5 GB. One email when an issue starts, a reminder every 6 hours while it
-lasts, and one "resolved" email. It runs in its own thread so it still fires when the refresh itself is hung.
+after it was due, free disk is under 1.5 GB, the Portfolio Risk KPI container has not answered for 5 minutes, or the
+KPI tool's daily 19:00 Purely Energy price collection did not succeed. One email when an issue starts, a reminder
+every 6 hours while it lasts, and one "resolved" email. It runs in its own thread so it still fires when the refresh
+itself is hung.
 
-Configure it in the `.env` file next to `docker-compose.yml` on the server (nothing goes in git); unset means issues are only logged:
+**Set it up (on the server):**
 
-```
-ALERT_EMAIL_TO=you@example.com
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=you@gmail.com
-SMTP_PASSWORD=<an app password, not the account password>
+```bash
+cd ~/Mazao-Market-Intelligence && git pull && bash deploy/setup-alerts.sh
 ```
 
-Then `sudo docker compose up -d` and check it with `sudo docker compose exec gbpw gbpw test-alert`.
-It cannot report the whole server or container being down (it would be down too): add an outside uptime
+It asks for the recipient and your SMTP login (for Gmail: an App Password from
+https://myaccount.google.com/apppasswords, with 2-step verification on), writes them to `.env`, restarts the app
+and sends a test email. The password is typed hidden and never printed or committed. Check it again any time with
+`sudo docker compose exec gbpw gbpw test-alert`. Unset means issues are only logged, not emailed.
+
+It cannot report the whole server or the app container being down (it would be down too): add an outside uptime
 monitor on the site URL for that.

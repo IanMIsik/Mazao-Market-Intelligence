@@ -8,6 +8,8 @@ What it watches (each is an "issue" with a key):
   data_stale     the newest FUELINST reading is over 90 minutes old (data not arriving)
   weekly_missing last week's GB Power Weekly report is still unpublished 24h after it was due
   disk_low       free disk under 1.5 GB (the server filled up once already)
+  kpi_down       the Portfolio Risk KPI container has not answered for 5 minutes (KPI_STATUS_URL)
+  kpi_prices_missed  the KPI tool's daily Purely Energy price collection missed its 19:00 UK run
 
 Per issue: one email when it starts, a reminder every 6 hours while it lasts, one "resolved"
 email when it clears. Nothing is sent while an issue stays quiet.
@@ -24,12 +26,14 @@ uptime monitor for that.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
 import smtplib
 import socket
 import threading
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
@@ -47,6 +51,8 @@ WEEKLY_GRACE = timedelta(hours=24)
 WEEKLY_READY_HOUR = 6  # London time, same as background_refresh.WEEKLY_REPORT_READY_HOUR
 DISK_LOW_BYTES = int(1.5 * 1024**3)
 REMINDER_EVERY = timedelta(hours=6)
+KPI_DOWN_AFTER = timedelta(minutes=5)   # a rebuild of the KPI container takes about a minute
+KPI_RUN_GRACE = timedelta(hours=3)      # the daily collection runs after 19:00 UK; allow time before alarming
 
 _STARTED = datetime.now(timezone.utc)
 
@@ -103,7 +109,7 @@ def _ago(delta: timedelta) -> str:
     return f"{minutes // 60}h {minutes % 60}m" if minutes >= 60 else f"{minutes}m"
 
 
-def check_all(db_path: Path, health: dict, now: datetime | None = None) -> dict[str, str]:
+def check_all(db_path: Path, health: dict, now: datetime | None = None, kpi_url: str | None = None) -> dict[str, str]:
     """The issues open right now: {key: human-readable message}."""
     now = now or datetime.now(timezone.utc)
     issues: dict[str, str] = {}
@@ -152,6 +158,60 @@ def check_all(db_path: Path, health: dict, now: datetime | None = None) -> dict[
     if free < DISK_LOW_BYTES:
         issues["disk_low"] = f"Only {free / 1024**3:.1f} GB of disk is free on the server; the database and Docker builds need room."
 
+    issues.update(check_kpi(kpi_url, now))
+    return issues
+
+
+# ---- the Portfolio Risk KPI tool -------------------------------------------------
+
+_kpi_first_failure: datetime | None = None  # when the KPI container first stopped answering
+
+
+def _fetch_kpi_status(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310 -- URL comes from our own config
+        return json.load(resp)
+
+
+def _last_expected_collection(now: datetime) -> datetime | None:
+    """The most recent weekday 19:00 UK slot that is at least KPI_RUN_GRACE in the past."""
+    london = now.astimezone(ZoneInfo("Europe/London"))
+    for back in range(0, 6):
+        day = (london - timedelta(days=back)).date()
+        slot = datetime.combine(day, datetime.min.time().replace(hour=19), tzinfo=london.tzinfo)
+        if slot.weekday() < 5 and slot <= london - KPI_RUN_GRACE:
+            return slot
+    return None
+
+
+def check_kpi(url: str | None, now: datetime, fetch=_fetch_kpi_status) -> dict[str, str]:
+    """Issues with the Portfolio Risk KPI tool, read from its own /api/prices/status."""
+    global _kpi_first_failure
+    if not url:
+        return {}
+    try:
+        status = fetch(url)
+    except Exception as e:  # noqa: BLE001 -- any failure to answer counts as "not answering"
+        _kpi_first_failure = _kpi_first_failure or now
+        if now - _kpi_first_failure >= KPI_DOWN_AFTER:
+            return {"kpi_down": f"The Portfolio Risk KPI tool has not answered for {_ago(now - _kpi_first_failure)} ({type(e).__name__}: {e}). /risk/ is unavailable."}
+        return {}
+    _kpi_first_failure = None
+
+    issues: dict[str, str] = {}
+    scheduler = status.get("scheduler") or {}
+    expected = _last_expected_collection(now)
+    if scheduler.get("enabled") and expected:
+        job = next((j for j in scheduler.get("jobs", []) if j.get("job") == "purely"), None)
+        last_ok = None
+        if job and job.get("last_ok"):
+            last_ok = datetime.fromisoformat(job["last_ok"].replace("Z", "+00:00"))
+        if last_ok is None or last_ok < expected:
+            issues["kpi_prices_missed"] = (
+                f"The Portfolio Risk KPI tool's daily Purely Energy price collection has not succeeded since "
+                f"{last_ok:%a %d %b %H:%M} UTC" if last_ok else "The Portfolio Risk KPI tool's daily Purely Energy price collection has never succeeded"
+            ) + f" (it was due after {expected:%a %d %b} 19:00 UK time)." + (
+                f" Last result: {job.get('last_result')}." if job and job.get("last_result") else ""
+            ) + " Purely Energy only shows the last two closes, so prices can be lost if this stays broken."
     return issues
 
 
@@ -198,7 +258,7 @@ def start_watchdog(db_path: Path, stop: threading.Event, health: dict, interval_
     def _loop() -> None:
         while not stop.wait(interval_seconds):  # first check after one interval, not at startup
             try:
-                alerter.process(check_all(db_path, health))
+                alerter.process(check_all(db_path, health, kpi_url=os.environ.get("KPI_STATUS_URL")))
             except Exception:  # noqa: BLE001 -- the watchdog itself must not die
                 logger.exception("alerts: watchdog check failed")
 
