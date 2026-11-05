@@ -37,6 +37,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from .assets import make_templates
+from ..storage import connect
 from .deps import get_db
 
 COOKIE_NAME = "mazao_session"
@@ -87,23 +88,51 @@ def normalise_email(email: str) -> str:
     return email.strip().lower()
 
 
-def upsert_user(conn: sqlite3.Connection, email: str, password: str) -> bool:
-    """Creates the user or resets their password. Returns True if newly created."""
+def _validate_new(email: str, password: str) -> str:
     email = normalise_email(email)
     if "@" not in email or " " in email:
         raise ValueError("That does not look like an email address.")
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
+    return email
+
+
+def upsert_user(conn: sqlite3.Connection, email: str, password: str, admin: bool | None = None) -> bool:
+    """Creates the user or resets their password. `admin` None leaves an existing user's admin flag
+    alone (a new user is not an admin). Returns True if newly created."""
+    email = _validate_new(email, password)
     existed = conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone() is not None
     conn.execute(
         """
-        INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)
+        INSERT INTO users (email, password_hash, created_at, is_admin) VALUES (?, ?, ?, ?)
         ON CONFLICT (email) DO UPDATE SET password_hash = excluded.password_hash
         """,
-        (email, hash_password(password), datetime.now(timezone.utc).isoformat()),
+        (email, hash_password(password), datetime.now(timezone.utc).isoformat(), int(bool(admin))),
     )
+    if admin is not None and existed:
+        conn.execute("UPDATE users SET is_admin = ? WHERE email = ?", (int(admin), email))
     conn.commit()
     return not existed
+
+
+def set_admin(conn: sqlite3.Connection, email: str, admin: bool) -> bool:
+    cur = conn.execute("UPDATE users SET is_admin = ? WHERE email = ?", (int(admin), normalise_email(email)))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def config_admins() -> set[str]:
+    """Emails that are always admins, from the ADMIN_EMAILS setting (comma-separated). A safety net
+    as well as a bootstrap: whatever happens to the database, these accounts keep admin access."""
+    return {normalise_email(e) for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
+
+
+def is_admin(conn: sqlite3.Connection, email: str) -> bool:
+    email = normalise_email(email)
+    if email in config_admins():
+        return True
+    row = conn.execute("SELECT is_admin FROM users WHERE email = ?", (email,)).fetchone()
+    return bool(row and row[0])
 
 
 def delete_user(conn: sqlite3.Connection, email: str) -> bool:
@@ -114,6 +143,14 @@ def delete_user(conn: sqlite3.Connection, email: str) -> bool:
 
 def list_users(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     return conn.execute("SELECT email, created_at FROM users ORDER BY email").fetchall()
+
+
+def list_users_detailed(conn: sqlite3.Connection) -> list[dict]:
+    admins = config_admins()
+    return [
+        {"email": email, "created": created[:10], "admin": bool(flag) or email in admins, "config_admin": email in admins}
+        for email, created, flag in conn.execute("SELECT email, created_at, is_admin FROM users ORDER BY email")
+    ]
 
 
 # ---- session cookie --------------------------------------------------------
@@ -195,6 +232,30 @@ def _recent_failures(addr: str, now: float) -> list[float]:
     kept = [t for t in _failures.get(addr, []) if now - t < FAILURE_WINDOW_SECONDS]
     _failures[addr] = kept
     return kept
+
+
+async def read_form(request: Request) -> dict[str, str]:
+    raw = parse_qs((await request.body()).decode("utf-8", "replace"), keep_blank_values=True)
+    return {k: v[0] for k, v in raw.items()}
+
+
+def csrf_token(secret: bytes, session_token: str | None) -> str:
+    """Tied to the session cookie, so a form from one session cannot be replayed in another."""
+    return hmac.new(secret, f"csrf|{session_token or ''}".encode(), hashlib.sha256).hexdigest()
+
+
+def session_context(request: Request) -> dict:
+    """Template context for every page: who is signed in (None if nobody), and whether an admin."""
+    token = request.cookies.get(COOKIE_NAME)
+    state = getattr(request.app, "state", None)
+    if not token or state is None or not hasattr(state, "db_path"):
+        return {"auth_user": None, "auth_is_admin": False}
+    conn = connect(state.db_path)
+    try:
+        email = user_from_token(conn, state.session_secret, token)
+        return {"auth_user": email, "auth_is_admin": bool(email and is_admin(conn, email))}
+    finally:
+        conn.close()
 
 
 def _current_user(request: Request, conn: sqlite3.Connection) -> str | None:

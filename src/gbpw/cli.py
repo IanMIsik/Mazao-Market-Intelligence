@@ -14,7 +14,8 @@ Command-line entry point tying ingest / narrative / render / publish together.
     gbpw ingest-desnz-prices
     gbpw ingest-gdp-deflator
     gbpw prune-forecasts [--vacuum]
-    gbpw create-user --email a@b.com [--password-stdin]   (also resets a password)
+    gbpw create-user --email a@b.com [--admin] [--password-stdin]   (also resets a password)
+    gbpw set-admin --email a@b.com [--revoke]
     gbpw delete-user --email a@b.com
     gbpw list-users
     gbpw test-alert      (sends a test email using the ALERT_EMAIL_TO / SMTP_* settings)
@@ -230,8 +231,13 @@ def main(argv: list[str] | None = None) -> None:
 
     p_cuser = sub.add_parser("create-user", help="create a sign-in account for the private pages (/risk), or reset that account's password")
     p_cuser.add_argument("--email", required=True)
+    p_cuser.add_argument("--admin", action="store_true", help="make this account an admin (can manage users at /admin/users)")
     p_cuser.add_argument("--password-stdin", action="store_true", help="read the password from stdin instead of prompting (for docker exec -T)")
     p_cuser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+    p_aduser = sub.add_parser("set-admin", help="grant (or with --revoke, remove) admin on an existing account")
+    p_aduser.add_argument("--email", required=True)
+    p_aduser.add_argument("--revoke", action="store_true")
+    p_aduser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
     p_duser = sub.add_parser("delete-user", help="delete a sign-in account (their session stops working immediately)")
     p_duser.add_argument("--email", required=True)
     p_duser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
@@ -400,11 +406,20 @@ def main(argv: list[str] | None = None) -> None:
                 print("Passwords do not match.")
                 sys.exit(1)
         try:
-            created = auth.upsert_user(conn, args.email, password)
+            created = auth.upsert_user(conn, args.email, password, admin=True if args.admin else None)
         except ValueError as e:
             print(e)
             sys.exit(1)
         print(f"{'Created' if created else 'Reset the password for'} {auth.normalise_email(args.email)}.")
+
+    elif args.command == "set-admin":
+        from .web import auth
+
+        if auth.set_admin(conn, args.email, not args.revoke):
+            print(f"{auth.normalise_email(args.email)} is {'no longer' if args.revoke else 'now'} an admin.")
+        else:
+            print("No such user: create the account first (gbpw create-user).")
+            sys.exit(1)
 
     elif args.command == "delete-user":
         from .web import auth
@@ -414,9 +429,9 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "list-users":
         from .web import auth
 
-        rows = auth.list_users(conn)
-        for email, created in rows:
-            print(f"{email}  (created {created[:10]})")
+        rows = auth.list_users_detailed(conn)
+        for u in rows:
+            print(f"{u['email']}  (created {u['created']}){'  [admin]' if u['admin'] else ''}")
         print(f"{len(rows)} user(s).")
 
     elif args.command == "test-alert":

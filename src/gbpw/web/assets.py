@@ -38,7 +38,13 @@ class NoCacheStaticFiles(StaticFiles):
         return response
 
 
+def _auth_context(request) -> dict:
+    from . import auth  # lazy: auth imports this module
+
+    return auth.session_context(request)
+
+
 def make_templates(directory) -> Jinja2Templates:
-    templates = Jinja2Templates(directory=str(directory))
+    templates = Jinja2Templates(directory=str(directory), context_processors=[_auth_context])
     templates.env.globals["asset_v"] = ASSET_VERSION
     return templates

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Users | Mazao Consulting{% endblock %}
+
+{% block content %}
+
+<header>
+  <div class="brand2">Users</div>
+  <div class="stamp num">Signed in as {{ me }}</div>
+</header>
+
+<h1>Who can sign in.</h1>
+<p class="byline">These accounts open the Portfolio Risk KPI tool. Admins can also manage this list. The market pages stay public.</p>
+
+{% if msg %}<div class="admin-msg" role="status">{{ msg }}</div>{% endif %}
+{% if err %}<div class="form-error" role="alert">{{ err }}</div>{% endif %}
+
+<div class="today-card">
+  <div class="today-card-head"><h2>Add a user</h2></div>
+  <form method="post" action="/admin/users/create" class="admin-add" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Email<input type="email" name="email" required></label>
+    <label>Password
+      <span class="pw-row">
+        <input type="text" name="password" id="new-password" minlength="{{ min_length }}" required autocomplete="new-password">
+        <button type="button" class="pw-toggle" id="gen-password">Generate</button>
+      </span>
+    </label>
+    <label class="check"><input type="checkbox" name="is_admin"> Admin</label>
+    <button class="btn" type="submit">Create user</button>
+  </form>
+  <p class="section-note">At least {{ min_length }} characters. You choose or generate the password and pass it to them yourself; it is not shown again.</p>
+</div>
+
+<div class="today-card">
+  <div class="today-card-head"><h2>Accounts ({{ users|length }})</h2></div>
+  {% if users %}
+  <div class="table-scroll">
+  <table class="admin-table">
+    <thead><tr><th>Email</th><th>Created</th><th>Role</th><th>Reset password</th><th></th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr>
+        <td>{{ u.email }}{% if u.email == me %} <span class="you">you</span>{% endif %}</td>
+        <td class="num">{{ u.created }}</td>
+        <td>
+          {% if u.admin %}<span class="badge-admin">Admin</span>{% if u.config_admin %} <span class="section-note">(server setting)</span>{% endif %}{% else %}User{% endif %}
+          {% if u.email != me and not u.config_admin %}
+          <form method="post" action="/admin/users/admin" class="inline">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="email" value="{{ u.email }}">
+            <input type="hidden" name="make_admin" value="{{ '0' if u.admin else '1' }}">
+            <button class="link-btn" type="submit">{{ 'Remove admin' if u.admin else 'Make admin' }}</button>
+          </form>
+          {% endif %}
+        </td>
+        <td>
+          <form method="post" action="/admin/users/password" class="inline" autocomplete="off">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="email" value="{{ u.email }}">
+            <input type="password" name="password" placeholder="New password" minlength="{{ min_length }}" required autocomplete="new-password">
+            <button class="link-btn" type="submit">Set</button>
+          </form>
+        </td>
+        <td>
+          {% if u.email != me %}
+          <form method="post" action="/admin/users/delete" class="inline" onsubmit="return confirm('Delete {{ u.email }}? They will be signed out immediately.');">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="email" value="{{ u.email }}">
+            <button class="link-btn danger" type="submit">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="section-note">No accounts yet.</p>
+  {% endif %}
+</div>
+
+<script>
+(function () {
+  var btn = document.getElementById('gen-password'), input = document.getElementById('new-password');
+  btn.addEventListener('click', function () {
+    var chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789', out = '';
+    var buf = new Uint32Array(16);
+    crypto.getRandomValues(buf);
+    for (var i = 0; i < buf.length; i++) out += chars[buf[i] % chars.length];
+    input.value = out;
+  });
+})();
+</script>
+{% endblock %}

@@ -19,6 +19,13 @@
       <a href="/forecasts" class="{{ 'on' if active_nav == 'forecasts' else '' }}">Forecasts</a>
       <a href="/ppa" class="{{ 'on' if active_nav == 'ppa' else '' }}">PPA tools</a>
     </nav>
+    {% if auth_user %}
+    <div class="who">
+      <span class="who-email">{{ auth_user }}</span>
+      {% if auth_is_admin %}<a href="/admin/users">Users</a>{% endif %}
+      <a href="/logout">Sign out</a>
+    </div>
+    {% endif %}
   </div>
 </div>
 
