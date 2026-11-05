@@ -16,7 +16,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..storage import DEFAULT_DB_PATH
-from . import routes_bess, routes_forecasts, routes_gbpw, routes_live, routes_ppa, routes_ppa_pricing
+from . import auth, routes_bess, routes_forecasts, routes_gbpw, routes_live, routes_ppa, routes_ppa_pricing
 from .background_refresh import start_background_refresh
 from .deps import get_db, make_get_db
 
@@ -47,7 +47,9 @@ def create_app(db_path: Path = DEFAULT_DB_PATH) -> FastAPI:
     # second Depends() target since it's a plain value, not a per-request
     # resource with its own lifecycle.
     app.state.db_path = db_path
+    app.state.session_secret = auth.load_secret(db_path)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app.include_router(auth.router)
     app.include_router(routes_gbpw.router)
     app.include_router(routes_bess.router)
     app.include_router(routes_live.router)

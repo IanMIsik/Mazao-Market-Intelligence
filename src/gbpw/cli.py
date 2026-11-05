@@ -14,6 +14,9 @@ Command-line entry point tying ingest / narrative / render / publish together.
     gbpw ingest-desnz-prices
     gbpw ingest-gdp-deflator
     gbpw prune-forecasts [--vacuum]
+    gbpw create-user --email a@b.com [--password-stdin]   (also resets a password)
+    gbpw delete-user --email a@b.com
+    gbpw list-users
 
 `run` is the one-shot form meant for a scheduler: ingest the trailing window
 then build, writing to <out-dir>/gbpw-<week-ending>.html. `--week-ending auto`
@@ -224,6 +227,16 @@ def main(argv: list[str] | None = None) -> None:
     p_prune.add_argument("--vacuum", action="store_true", help="afterwards VACUUM to shrink the file (slow; blocks writers; needs free disk ~= db size)")
     p_prune.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
+    p_cuser = sub.add_parser("create-user", help="create a sign-in account for the private pages (/risk), or reset that account's password")
+    p_cuser.add_argument("--email", required=True)
+    p_cuser.add_argument("--password-stdin", action="store_true", help="read the password from stdin instead of prompting (for docker exec -T)")
+    p_cuser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+    p_duser = sub.add_parser("delete-user", help="delete a sign-in account (their session stops working immediately)")
+    p_duser.add_argument("--email", required=True)
+    p_duser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+    p_luser = sub.add_parser("list-users", help="list sign-in accounts")
+    p_luser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+
     p_run = sub.add_parser("run", help="ingest + build in one step, for a scheduler")
     p_run.add_argument("--week-ending", type=_week_ending_or_auto, default="auto")
     p_run.add_argument("--out-dir", type=Path, default=Path("out"))
@@ -370,6 +383,38 @@ def main(argv: list[str] | None = None) -> None:
             print("Vacuuming...")
             conn.execute("VACUUM")
             print("Done.")
+
+    elif args.command == "create-user":
+        from .web import auth
+
+        if args.password_stdin:
+            password = sys.stdin.readline().rstrip("\r\n")
+        else:
+            import getpass
+
+            password = getpass.getpass("Password (min 10 characters): ")
+            if password != getpass.getpass("Repeat password: "):
+                print("Passwords do not match.")
+                sys.exit(1)
+        try:
+            created = auth.upsert_user(conn, args.email, password)
+        except ValueError as e:
+            print(e)
+            sys.exit(1)
+        print(f"{'Created' if created else 'Reset the password for'} {auth.normalise_email(args.email)}.")
+
+    elif args.command == "delete-user":
+        from .web import auth
+
+        print("Deleted." if auth.delete_user(conn, args.email) else "No such user.")
+
+    elif args.command == "list-users":
+        from .web import auth
+
+        rows = auth.list_users(conn)
+        for email, created in rows:
+            print(f"{email}  (created {created[:10]})")
+        print(f"{len(rows)} user(s).")
 
     elif args.command == "status":
         healthy = _print_status(conn, args.week_ending, args.history_days)

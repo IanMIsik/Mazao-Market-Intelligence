@@ -22,3 +22,15 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ENTSOE_KEY=${ENTSOE_KEY:-}
     restart: unless-stopped
+
+  # Portfolio Risk KPI, served at /risk/ behind the sign-in page (see deploy/enable-risk.sh and
+  # deploy/nginx-risk.conf). Only starts with `--profile risk`, so a plain `docker compose up`
+  # is unchanged. Bound to localhost: Nginx is the only way in, after the sign-in check.
+  risk:
+    profiles: ["risk"]
+    build: ${RISK_APP_DIR:-../risk-kpi}
+    ports:
+      - "127.0.0.1:8020:8020"
+    volumes:
+      - ./risk-data:/data
+    restart: unless-stopped

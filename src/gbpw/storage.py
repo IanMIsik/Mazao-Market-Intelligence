@@ -250,6 +250,14 @@ CREATE TABLE IF NOT EXISTS gdp_deflator (
     fetched_at   TEXT NOT NULL,
     PRIMARY KEY (year, vintage)
 );
+
+-- Sign-in accounts for the private part of the site (web/auth.py). Created
+-- with `gbpw create-user`; passwords are stored only as scrypt hashes.
+CREATE TABLE IF NOT EXISTS users (
+    email          TEXT PRIMARY KEY,
+    password_hash  TEXT NOT NULL,
+    created_at     TEXT NOT NULL
+);
 """
 
 

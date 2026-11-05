@@ -204,3 +204,34 @@ Windows/Task Scheduler equivalent for a non-server setup.
 `deploy/weekly-cron.sh` is the older host-cron approach and is no longer
 needed on the Docker deployment; if it was installed, remove it with
 `crontab -l | grep -v gbpw-weekly-report | crontab -`.
+
+## Sign-in and the Portfolio Risk KPI tool (`/risk`)
+
+The market pages are public. The Portfolio Risk KPI tool (a separate app, the "UK Futures Analysis Tool"
+project) is served at **`/risk/`** behind a real sign-in page (`/login`): accounts in this app's own SQLite
+database (`users` table), scrypt-hashed passwords, a signed HttpOnly session cookie (14 days), rate-limited
+failed logins, sign-out at `/logout`. Code: `web/auth.py`. Nginx asks `GET /auth/check` before serving anything
+under `/risk/` (`deploy/nginx-risk.conf`); not signed in means a redirect to `/login`, and back after signing in.
+
+There is no sign-up page: accounts are created by an administrator.
+
+```bash
+sudo docker compose exec gbpw gbpw create-user --email someone@example.com     # prompts for a password (min 10 chars); also resets one
+echo 'a-long-password' | sudo docker compose exec -T gbpw gbpw create-user --email someone@example.com --password-stdin
+sudo docker compose exec gbpw gbpw list-users
+sudo docker compose exec gbpw gbpw delete-user --email someone@example.com     # their session stops working immediately
+```
+
+Changing a password or deleting a user signs that user out everywhere. The cookie-signing secret is
+`SESSION_SECRET` if set, otherwise generated once into `data/.session_secret` (keep it out of git; it is ignored).
+
+**Enable `/risk/` on the server** (after deploying this code and copying the KPI project to `~/risk-kpi`):
+
+```bash
+bash deploy/enable-risk.sh            # or: bash deploy/enable-risk.sh /path/to/UK-Futures-Analysis-Tool
+```
+
+It installs the Nginx rules, then builds and starts the `risk` container (compose profile `risk`, bound to
+127.0.0.1:8020, data in `./risk-data`). Copy the collected `prices.db` into `./risk-data/` before first use:
+collected prices cannot be rebuilt from the seed. After a deploy, restart it with
+`sudo docker compose --profile risk up -d --build`.
