@@ -245,7 +245,7 @@ KPI tool's daily 19:00 Purely Energy price collection did not succeed. One email
 every 6 hours while it lasts, and one "resolved" email. It runs in its own thread so it still fires when the refresh
 itself is hung.
 
-**Set it up (on the server):**
+**Set it up (on the server).** Either edit the `.env` file by hand (`nano ~/Mazao-Market-Intelligence/.env`; `.env.example` lists every setting) and run `sudo docker compose --profile risk up -d`, or use the script below, which writes the same file for you:
 
 ```bash
 cd ~/Mazao-Market-Intelligence && git pull && bash deploy/setup-alerts.sh

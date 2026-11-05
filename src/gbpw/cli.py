@@ -244,7 +244,8 @@ def main(argv: list[str] | None = None) -> None:
     p_luser = sub.add_parser("list-users", help="list sign-in accounts")
     p_luser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
-    sub.add_parser("test-alert", help="send a test alert email using the ALERT_EMAIL_TO / SMTP_* environment settings")
+    p_testalert = sub.add_parser("test-alert", help="send a test alert email using the ALERT_EMAIL_TO / SMTP_* environment settings")
+    p_testalert.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
     p_run = sub.add_parser("run", help="ingest + build in one step, for a scheduler")
     p_run.add_argument("--week-ending", type=_week_ending_or_auto, default="auto")

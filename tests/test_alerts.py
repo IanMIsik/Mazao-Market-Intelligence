@@ -180,3 +180,28 @@ def test_check_all_includes_the_kpi_issues(tmp_path, kpi):
     alerts.check_all(db, FRESH, NOW, kpi_url="http://risk/")  # starts the outage clock
     issues = alerts.check_all(db, FRESH, NOW + timedelta(minutes=10), kpi_url="http://nowhere.invalid:1/")
     assert "kpi_down" in issues
+
+
+def test_the_test_alert_command_runs_and_reports_missing_settings_instead_of_crashing(monkeypatch, tmp_path, capsys):
+    # Regression: `gbpw test-alert` died with AttributeError ('Namespace' has no attribute 'db').
+    from gbpw import cli
+
+    for k in ("ALERT_EMAIL_TO", "SMTP_HOST"):
+        monkeypatch.delenv(k, raising=False)
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["test-alert", "--db", str(tmp_path / "t.db")])
+    assert exit_info.value.code == 1
+    assert "Not configured" in capsys.readouterr().out
+
+
+def test_the_test_alert_command_sends_when_configured(monkeypatch, tmp_path, capsys):
+    from gbpw import cli
+
+    monkeypatch.setenv("ALERT_EMAIL_TO", "a@example.com")
+    monkeypatch.setenv("SMTP_HOST", "smtp.test")
+    sent = []
+    monkeypatch.setattr(alerts, "send_email", lambda subject, body: sent.append(subject) or True)
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["test-alert", "--db", str(tmp_path / "t.db")])
+    assert exit_info.value.code == 0 and sent == ["[Mazao] Test alert"]
+    assert "Test email sent" in capsys.readouterr().out
