@@ -53,9 +53,20 @@ WEEKLY_REPORT_READY_HOUR = 6  # London time on the Monday after the week ends --
 WEEKLY_REPORT_RETRY_SECONDS = 3600  # a failed attempt (incomplete data) re-runs a 37-day ingest, so don't retry every 5 minutes
 
 _weekly_last_attempt: float | None = None
+WEEKLY_INGEST_CHUNK_DAYS = 7
+
+# One ingest at a time: the live refresh and the weekly build each fan out into a 16-thread
+# pool, and two at once on a small (1 GB) server risks running out of memory. The weekly build
+# takes this lock one 7-day chunk at a time, so the live refresh waits at most one chunk.
+_ingest_lock = threading.Lock()
 
 
 def _refresh_once(db_path: Path) -> None:
+    with _ingest_lock:
+        _refresh_body(db_path)
+
+
+def _refresh_body(db_path: Path) -> None:
     today = london_today()
     start = today - timedelta(days=TRAILING_WINDOW_DAYS)
     # EAC clears day-ahead -- NESO routinely publishes tomorrow's auction
@@ -197,7 +208,10 @@ def _weekly_report_once(db_path: Path, now: datetime | None = None) -> None:
 
         if report is None:
             logger.info("weekly report: building week ending %s", week_ending)
-            ingest_week_parallel(db_path, history_range(week_ending, WEEKLY_REPORT_HISTORY_DAYS))
+            days = history_range(week_ending, WEEKLY_REPORT_HISTORY_DAYS)
+            for i in range(0, len(days), WEEKLY_INGEST_CHUNK_DAYS):
+                with _ingest_lock:
+                    ingest_week_parallel(db_path, days[i : i + WEEKLY_INGEST_CHUNK_DAYS])
             out_path = db_path.parent.parent / "out" / f"gbpw-{week_ending.isoformat()}.html"
             try:
                 build_report(conn, week_ending, out_path)
@@ -289,13 +303,20 @@ def start_background_refresh(db_path: Path, interval_seconds: int = DEFAULT_INTE
                 _refresh_once(db_path)
             except Exception:  # noqa: BLE001 -- a bad refresh cycle must not kill the loop
                 logger.exception("background refresh cycle failed, will retry next interval")
+            if stop.wait(interval_seconds):
+                break
+
+    def _weekly_loop() -> None:
+        # Its own thread, on purpose: a weekly build runs a 37-day ingest that takes many
+        # minutes, and run inline after the refresh it froze Live Market for that long.
+        while True:
             try:
                 _weekly_report_once(db_path)
-            except Exception:  # noqa: BLE001 -- independent of the refresh above, and vice versa
+            except Exception:  # noqa: BLE001 -- must not kill the loop
                 logger.exception("weekly report cycle failed, will retry later")
             if stop.wait(interval_seconds):
                 break
 
-    thread = threading.Thread(target=_loop, name="bess-background-refresh", daemon=True)
-    thread.start()
+    threading.Thread(target=_loop, name="bess-background-refresh", daemon=True).start()
+    threading.Thread(target=_weekly_loop, name="weekly-report", daemon=True).start()
     return stop

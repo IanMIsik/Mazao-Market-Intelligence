@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import date
 
 import pandas as pd
@@ -41,11 +41,22 @@ PAIRS: dict[tuple[str, str], str] = {
 }
 
 
+# entsoe-py's default is timeout=None, i.e. wait forever. On 2026-11-04 ENTSO-E stopped answering
+# mid-request; the seven stuck fetch threads blocked the whole background refresh (so Live Market
+# froze) for 30+ hours. Hence a real socket timeout, few retries, and an overall deadline below.
+ENTSOE_TIMEOUT_SECONDS = 20
+ENTSOE_RETRIES = 1
+ENTSOE_RETRY_DELAY_SECONDS = 2
+ENTSOE_DEADLINE_SECONDS = 150  # whole fetch, all seven links
+
+
 def _client() -> EntsoePandasClient:
     key = os.environ.get("ENTSOE_KEY")
     if not key:
         raise RuntimeError("ENTSOE_KEY environment variable is not set")
-    return EntsoePandasClient(api_key=key)
+    return EntsoePandasClient(
+        api_key=key, retry_count=ENTSOE_RETRIES, retry_delay=ENTSOE_RETRY_DELAY_SECONDS, timeout=ENTSOE_TIMEOUT_SECONDS
+    )
 
 
 def _fetch_pair_net(
@@ -96,11 +107,15 @@ def fetch_continental_scheduled(d: date) -> tuple[list[PriceRow], str]:
     start = pd.Timestamp(d, tz="Europe/Brussels")
     end = start + pd.Timedelta(days=1)
 
-    def _one(pair: tuple[str, str]) -> tuple[tuple[str, str], pd.Series | None]:
-        return pair, _fetch_pair_net(client, pair, start, end)
-
-    with ThreadPoolExecutor(max_workers=len(PAIRS)) as pool:
-        results = list(pool.map(_one, PAIRS))
+    # Not `with ThreadPoolExecutor(...)`: its exit waits for every worker, so one hung request
+    # would hang the caller. Wait up to a deadline, then abandon whatever is still running.
+    pool = ThreadPoolExecutor(max_workers=len(PAIRS))
+    futures = {pair: pool.submit(_fetch_pair_net, client, pair, start, end) for pair in PAIRS}
+    wait(futures.values(), timeout=ENTSOE_DEADLINE_SECONDS)
+    pool.shutdown(wait=False, cancel_futures=True)
+    results = [
+        (pair, f.result() if f.done() and not f.exception() else None) for pair, f in futures.items()
+    ]
 
     out: list[PriceRow] = []
     failed: list[str] = []

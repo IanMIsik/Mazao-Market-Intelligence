@@ -1,4 +1,5 @@
 import sys
+import threading
 import time
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -172,7 +173,9 @@ def test_weekly_report_builds_and_publishes_last_completed_week(tmp_path, monkey
 
     assert calls["build"] == [(date(2026, 10, 4), tmp_path / "out" / "gbpw-2026-10-04.html")]
     assert calls["publish"] == [date(2026, 10, 4)]
-    assert calls["ingest"][0][-1] == date(2026, 10, 4)
+    ingested = [d for chunk in calls["ingest"] for d in chunk]
+    assert len(ingested) == len(set(ingested)) > 7 and ingested[-1] == date(2026, 10, 4)
+    assert all(len(chunk) <= background_refresh.WEEKLY_INGEST_CHUNK_DAYS for chunk in calls["ingest"])
 
 
 def test_weekly_report_waits_until_monday_morning(tmp_path, monkeypatch):
@@ -232,3 +235,19 @@ def test_weekly_report_incomplete_week_is_not_published_and_retry_is_throttled(t
 
     assert calls["publish"] == []
     assert len(calls["build"]) == 1  # second cycle skipped by the retry throttle
+
+
+def test_a_slow_weekly_report_never_blocks_the_live_refresh(tmp_path, monkeypatch):
+    # Regression: the weekly build (a many-minute 37-day ingest) used to run inline in the
+    # refresh loop, freezing Live Market for as long as it took.
+    release = threading.Event()
+    refreshes = []
+    monkeypatch.setattr(background_refresh, "_weekly_report_once", lambda p: release.wait(5))
+    monkeypatch.setattr(background_refresh, "_refresh_once", lambda p: refreshes.append(time.monotonic()))
+
+    stop = background_refresh.start_background_refresh(tmp_path / "gbpw.db", interval_seconds=0.05)
+    time.sleep(0.4)  # weekly job is stuck the whole time
+    stop.set()
+    release.set()
+
+    assert len(refreshes) >= 3
