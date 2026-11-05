@@ -18,17 +18,17 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 
 from .. import forecasts_metrics as fm
 from ..storage import latest_fetch_ts
+from .assets import make_templates
 from . import charts_live, http_cache
 from .deps import get_db
 
 router = APIRouter()
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+templates = make_templates(TEMPLATES_DIR)
 templates.env.filters["commas"] = lambda v, decimals=0: f"{v:,.{decimals}f}" if v is not None else "—"
 
 CHARTS = [

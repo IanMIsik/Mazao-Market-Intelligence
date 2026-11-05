@@ -41,7 +41,6 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from ..build import build_report
 from ..ingest import history_range, ingest_week_parallel
@@ -49,12 +48,13 @@ from ..metrics import IncompleteWeekError
 from ..render.render import render_week
 from ..settlement import most_recent_sunday
 from ..storage import get_report, latest_report_week, list_report_weeks
+from .assets import make_templates
 from .deps import get_db
 
 router = APIRouter()
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+templates = make_templates(TEMPLATES_DIR)
 
 _WEB_NAV_CSS = """
 <style>

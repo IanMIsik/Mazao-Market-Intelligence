@@ -35,8 +35,8 @@ from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 
+from .assets import make_templates
 from .deps import get_db
 
 COOKIE_NAME = "mazao_session"
@@ -48,7 +48,7 @@ FAILURE_WINDOW_SECONDS = 15 * 60
 
 _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1
 
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
+templates = make_templates(Path(__file__).resolve().parent / "templates")
 router = APIRouter()
 
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Mazao Energy Data Analytics{% endblock %}</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v={{ asset_v }}">
 {% block extra_head %}{% endblock %}
 </head>
 <body class="{{ 'live' if active_nav in ('live', 'forecasts') else '' }}" data-last-updated="{{ last_updated|default('') }}">

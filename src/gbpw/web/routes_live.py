@@ -48,7 +48,6 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 
 from .. import carbon_intensity_metrics as cim
 from .. import fuelinst_metrics as fim
@@ -57,13 +56,14 @@ from .. import power_flow_metrics as pfm
 from ..ingest.elexon import INTERCONNECTORS
 from ..settlement import london_today
 from ..storage import latest_fetch_ts
+from .assets import make_templates
 from . import charts_generation, charts_live, http_cache
 from .deps import get_db
 
 router = APIRouter()
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+templates = make_templates(TEMPLATES_DIR)
 templates.env.filters["commas"] = lambda v, decimals=0: f"{v:,.{decimals}f}" if v is not None else "—"
 # None-safe MW->GW conversion for GB Power Flow's ring values, which can
 # genuinely be None (a figure not published yet today) -- chains with
