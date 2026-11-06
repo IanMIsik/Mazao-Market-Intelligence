@@ -64,7 +64,7 @@ def test_logout_ends_the_session(client):
     _login(client)
     assert client.get("/auth/check").status_code == 204
     r = client.get("/logout")
-    assert r.status_code == 303 and r.headers["location"] == "/login"
+    assert r.status_code == 303 and r.headers["location"] == "/"  # no page given: the platform home
     client.cookies.clear()
     assert client.get("/auth/check").status_code == 401
 
@@ -192,3 +192,37 @@ def test_password_rules_and_stored_hash(tmp_path):
 
 def test_the_rest_of_the_site_stays_public(client):
     assert client.get("/static/app.css").status_code == 200
+
+
+def test_signing_out_returns_you_to_the_public_page_you_were_on(client):
+    c = TestClient(client.app, follow_redirects=False)
+    _login(c)
+    r = c.get("/logout?next=/ppa")
+    assert r.status_code == 303 and r.headers["location"] == "/ppa"
+    assert c.get("/auth/check").status_code == 401  # signed out for real
+    assert "mazao_session" in r.headers["set-cookie"] and "Max-Age=0" in r.headers["set-cookie"]
+
+
+@pytest.mark.parametrize("next_", [
+    "/risk/", "/risk", "/admin/users", "/login", "/auth/check",          # would just ask you to sign in again
+    "https://evil.example/", "//evil.example", "/\\evil", "javascript:alert(1)", "",
+])
+def test_signing_out_never_sends_you_to_a_page_that_needs_sign_in_or_off_site(client, next_):
+    assert auth.return_after_logout(next_) == "/"
+
+
+def test_signing_out_keeps_the_query_string_of_a_public_page(client):
+    assert auth.return_after_logout("/live?day=2026-11-04") == "/live?day=2026-11-04"
+
+
+def test_the_top_bar_signs_out_in_place_and_offers_sign_in_when_signed_out(client):
+    c = TestClient(client.app, follow_redirects=False)
+    assert 'href="/login?next=/ppa"' in c.get("/ppa").text and "/logout" not in c.get("/ppa").text
+    _login(c)
+    page = c.get("/live").text
+    assert 'href="/logout?next=/live"' in page and "Sign in" not in page
+
+
+def test_the_login_page_has_a_way_back_to_the_website(client):
+    html = client.get("/login").text
+    assert html.count('href="/"') >= 2 and "Back to Mazao Intelligence" in html

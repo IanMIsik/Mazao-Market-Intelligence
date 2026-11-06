@@ -571,3 +571,12 @@ body.live .appnav .who { color:var(--lm-dim); }
 .you { font-size:11px; color:var(--muted); border:1px solid var(--rule); border-radius:999px; padding:0 7px; margin-left:4px; }
 .link-btn { border:0; background:none; color:var(--navy-mid); font:inherit; font-size:13px; cursor:pointer; padding:4px 2px; text-decoration:underline; }
 .link-btn.danger { color:var(--signal); }
+
+/* Login page: the brand is a link home, and there is a clear way back to the website */
+.appnav a.brand-link { padding:0; border-bottom:0; display:block; }
+.appnav a.brand-link:hover { color:inherit; }
+.auth-page .appnav .wrap { justify-content:space-between; }
+.auth-back { margin:16px 0 0; font-size:13.5px; }
+.auth-back a { color:var(--navy-mid); text-decoration:none; font-weight:600; }
+.auth-back a:hover { text-decoration:underline; }
+@media (max-width:720px) { .auth-page .appnav nav { display:none; } }

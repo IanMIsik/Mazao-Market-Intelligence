@@ -23,7 +23,11 @@
     <div class="who">
       <span class="who-email">{{ auth_user }}</span>
       {% if auth_is_admin %}<a href="/admin/users">Users</a>{% endif %}
-      <a href="/logout">Sign out</a>
+      <a href="/logout?next={{ request.url.path | urlencode }}">Sign out</a>
+    </div>
+    {% else %}
+    <div class="who">
+      <a href="/login?next={{ request.url.path | urlencode }}">Sign in</a>
     </div>
     {% endif %}
   </div>

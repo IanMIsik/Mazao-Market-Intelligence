@@ -247,6 +247,23 @@ def safe_next(value: str | None) -> str:
     return value
 
 
+# Pages that need a sign-in (or are part of signing in): after signing out you cannot stay on them.
+_NEEDS_SIGN_IN = ("/risk", "/admin", "/login", "/logout", "/auth")
+
+
+def return_after_logout(value: str | None) -> str:
+    """Where to send someone after signing out: back to the public page they were on, otherwise the
+    platform home. Same-site paths only, and never a page that would just ask them to sign in again."""
+    if not value or not value.startswith("/") or value.startswith("//") or "\\" in value:
+        return "/"
+    parts = urlsplit(value)
+    if parts.scheme or parts.netloc:
+        return "/"
+    if any(parts.path == p or parts.path.startswith(p + "/") for p in _NEEDS_SIGN_IN):
+        return "/"
+    return value
+
+
 def client_address(request: Request) -> str:
     # Behind Nginx the socket peer is always loopback; Nginx sets X-Real-IP.
     peer = request.client.host if request.client else "unknown"
@@ -345,8 +362,8 @@ async def login_submit(request: Request, conn: sqlite3.Connection = Depends(get_
 
 
 @router.api_route("/logout", methods=["GET", "POST"])
-def logout(request: Request, conn: sqlite3.Connection = Depends(get_db)) -> Response:
+def logout(request: Request, next: str | None = None, conn: sqlite3.Connection = Depends(get_db)) -> Response:
     end_session(conn, request.app.state.session_secret, request.cookies.get(COOKIE_NAME))
-    response = RedirectResponse("/login", status_code=303)
+    response = RedirectResponse(return_after_logout(next), status_code=303)
     response.delete_cookie(COOKIE_NAME, path="/")
     return response
