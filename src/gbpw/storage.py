@@ -259,6 +259,16 @@ CREATE TABLE IF NOT EXISTS users (
     created_at     TEXT NOT NULL,
     is_admin       INTEGER NOT NULL DEFAULT 0
 );
+
+-- Server-side sign-in sessions (web/auth.py). The cookie holds only a signed random id, so a session
+-- can be ended (idle timeout, absolute limit, sign-out, password change, user deleted) on the server.
+CREATE TABLE IF NOT EXISTS sessions (
+    id         TEXT PRIMARY KEY,
+    email      TEXT NOT NULL,
+    created    REAL NOT NULL,
+    last_seen  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_email ON sessions(email);
 """
 
 

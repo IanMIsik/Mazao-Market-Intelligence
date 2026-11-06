@@ -83,17 +83,84 @@ def test_changing_a_password_or_deleting_the_user_revokes_existing_sessions(clie
     assert client.get("/auth/check").status_code == 401
 
 
-def test_forged_and_expired_tokens_are_rejected(client):
+def test_forged_tokens_are_rejected(client):
     conn = connect(client.db)
     secret = client.app.state.session_secret
-    h = conn.execute("SELECT password_hash FROM users").fetchone()[0]
-    good = auth.make_token(secret, "client@example.com", h)
+    good = auth.make_token(conn, secret, "client@example.com")
     assert auth.user_from_token(conn, secret, good) == "client@example.com"
     assert auth.user_from_token(conn, b"other-secret", good) is None
     assert auth.user_from_token(conn, secret, good[:-1] + ("0" if good[-1] != "0" else "1")) is None
-    assert auth.user_from_token(conn, secret, good, now=10**12) is None  # expired
     assert auth.user_from_token(conn, secret, "garbage") is None
+    assert auth.user_from_token(conn, secret, None) is None
     conn.close()
+
+
+T0 = 1_800_000_000.0  # an arbitrary fixed "now" for the timeout tests
+
+
+def _session(client, monkeypatch, idle=None, max_hours=None):
+    for key, value in (("SESSION_IDLE_MINUTES", idle), ("SESSION_MAX_HOURS", max_hours)):
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, str(value))
+    conn = connect(client.db)
+    secret = client.app.state.session_secret
+    return conn, secret, auth.make_token(conn, secret, "client@example.com", now=T0)
+
+
+def test_a_session_ends_after_the_idle_timeout(client, monkeypatch):
+    conn, secret, token = _session(client, monkeypatch)  # defaults: 60 min idle, 12 h max
+    assert auth.user_from_token(conn, secret, token, now=T0 + 59 * 60) == "client@example.com"
+    # 59 min later again is still within the idle window of that last activity...
+    assert auth.user_from_token(conn, secret, token, now=T0 + 59 * 60 + 59 * 60) == "client@example.com"
+    # ...but a gap of over 60 minutes with no activity ends it, and the row is gone for good.
+    assert auth.user_from_token(conn, secret, token, now=T0 + 59 * 60 + 59 * 60 + 61 * 60) is None
+    assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+    assert auth.user_from_token(conn, secret, token, now=T0 + 60) is None  # cannot be revived
+    conn.close()
+
+
+def test_a_session_ends_after_the_absolute_maximum_even_while_active(client, monkeypatch):
+    conn, secret, token = _session(client, monkeypatch)
+    t = T0
+    while t < T0 + 11.5 * 3600:  # busy the whole time, a request every 30 minutes
+        t += 30 * 60
+        assert auth.user_from_token(conn, secret, token, now=t) == "client@example.com"
+    assert auth.user_from_token(conn, secret, token, now=T0 + 12 * 3600 + 30) is None
+    conn.close()
+
+
+def test_the_limits_can_be_changed_with_settings(client, monkeypatch):
+    conn, secret, token = _session(client, monkeypatch, idle=5, max_hours=1)
+    assert auth.user_from_token(conn, secret, token, now=T0 + 4 * 60) == "client@example.com"
+    assert auth.user_from_token(conn, secret, token, now=T0 + 4 * 60 + 6 * 60) is None  # 5 min idle limit
+    token2 = auth.make_token(conn, secret, "client@example.com", now=T0)
+    for minute in range(4, 68, 4):
+        user = auth.user_from_token(conn, secret, token2, now=T0 + minute * 60)
+    assert user is None  # past the 1 hour maximum although never idle
+    conn.close()
+
+
+def test_signing_out_ends_the_session_on_the_server_so_a_copied_cookie_stops_working(client):
+    c = TestClient(client.app, follow_redirects=False)
+    _login(c)
+    stolen = c.cookies.get(auth.COOKIE_NAME)
+    assert c.get("/auth/check").status_code == 204
+    c.get("/logout")
+    replay = TestClient(client.app, follow_redirects=False)
+    replay.cookies.set(auth.COOKIE_NAME, stolen)
+    assert replay.get("/auth/check").status_code == 401
+
+
+def test_every_login_is_its_own_session_and_the_cookie_lifetime_matches_the_limit(client):
+    first, second = TestClient(client.app, follow_redirects=False), TestClient(client.app, follow_redirects=False)
+    r = _login(first)
+    _login(second)
+    assert first.cookies.get(auth.COOKIE_NAME) != second.cookies.get(auth.COOKIE_NAME)
+    assert f"Max-Age={12 * 3600}" in r.headers["set-cookie"]
+    first.get("/logout")
+    assert second.get("/auth/check").status_code == 204  # signing one device out leaves the other alone
 
 
 @pytest.mark.parametrize("bad", ["https://evil.example/", "//evil.example", "/\\evil", "javascript:alert(1)", ""])

@@ -10,10 +10,10 @@ The rest of the site stays public.
 
 Security choices, so they are not re-litigated:
 - Passwords: scrypt with a per-user salt (stdlib), compared in constant time.
-- Session cookie: "<b64 payload>.<hmac-sha256>", HttpOnly, SameSite=Lax,
-  Secure behind HTTPS. The payload carries a tag derived from the password
-  hash, so changing a password signs that user out everywhere; deleting a
-  user does the same (checked against the database on every request).
+- Sessions are server-side (table `sessions`): the cookie is "<random id>.<hmac-sha256>", HttpOnly,
+  SameSite=Lax, Secure behind HTTPS. A session ends after SESSION_IDLE_MINUTES (default 60) without
+  activity, or SESSION_MAX_HOURS (default 12) after sign-in, whichever comes first; also on sign-out,
+  a password change, or deleting the user. Every request is checked against the database.
 - The signing secret is SESSION_SECRET, or else generated once into
   data/.session_secret (the data volume survives container rebuilds).
 - Failed logins are rate-limited per client address (in memory).
@@ -41,7 +41,17 @@ from ..storage import connect
 from .deps import get_db
 
 COOKIE_NAME = "mazao_session"
-SESSION_SECONDS = 14 * 24 * 3600
+DEFAULT_IDLE_MINUTES = 60   # signed out after this long without any activity
+DEFAULT_MAX_HOURS = 12      # signed out this long after signing in, however active
+TOUCH_EVERY_SECONDS = 60    # how often an active session's last-seen time is written back
+
+
+def idle_seconds() -> float:
+    return float(os.environ.get("SESSION_IDLE_MINUTES") or DEFAULT_IDLE_MINUTES) * 60
+
+
+def max_seconds() -> float:
+    return float(os.environ.get("SESSION_MAX_HOURS") or DEFAULT_MAX_HOURS) * 3600
 DEFAULT_NEXT = "/risk/"
 MIN_PASSWORD_LENGTH = 10
 MAX_FAILURES = 5
@@ -111,6 +121,8 @@ def upsert_user(conn: sqlite3.Connection, email: str, password: str, admin: bool
     )
     if admin is not None and existed:
         conn.execute("UPDATE users SET is_admin = ? WHERE email = ?", (int(admin), email))
+    if existed:  # a changed password signs that user out everywhere
+        conn.execute("DELETE FROM sessions WHERE email = ?", (email,))
     conn.commit()
     return not existed
 
@@ -136,7 +148,9 @@ def is_admin(conn: sqlite3.Connection, email: str) -> bool:
 
 
 def delete_user(conn: sqlite3.Connection, email: str) -> bool:
-    cur = conn.execute("DELETE FROM users WHERE email = ?", (normalise_email(email),))
+    email = normalise_email(email)
+    cur = conn.execute("DELETE FROM users WHERE email = ?", (email,))
+    conn.execute("DELETE FROM sessions WHERE email = ?", (email,))
     conn.commit()
     return cur.rowcount > 0
 
@@ -173,35 +187,51 @@ def load_secret(db_path: Path) -> bytes:
         return secret
 
 
-def _tag(password_hash: str) -> str:
-    return hashlib.sha256(password_hash.encode()).hexdigest()[:12]
+def _sign(secret: bytes, sid: str) -> str:
+    return hmac.new(secret, sid.encode(), hashlib.sha256).hexdigest()
 
 
-def make_token(secret: bytes, email: str, password_hash: str, now: float | None = None) -> str:
-    expires = int((now if now is not None else time.time()) + SESSION_SECONDS)
-    payload = _b64(f"{email}|{expires}|{_tag(password_hash)}".encode())
-    return f"{payload}.{hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()}"
+def make_token(conn: sqlite3.Connection, secret: bytes, email: str, now: float | None = None) -> str:
+    """Starts a session for `email` and returns the cookie value: a random session id plus its signature."""
+    now = now if now is not None else time.time()
+    conn.execute("DELETE FROM sessions WHERE ? - last_seen > ? OR ? - created > ?", (now, idle_seconds(), now, max_seconds()))
+    sid = secrets.token_urlsafe(24)
+    conn.execute("INSERT INTO sessions (id, email, created, last_seen) VALUES (?, ?, ?, ?)", (sid, email, now, now))
+    conn.commit()
+    return f"{sid}.{_sign(secret, sid)}"
+
+
+def end_session(conn: sqlite3.Connection, secret: bytes, token: str | None) -> None:
+    sid, _, sig = (token or "").partition(".")
+    if sid and hmac.compare_digest(sig, _sign(secret, sid)):
+        conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+        conn.commit()
 
 
 def user_from_token(
     conn: sqlite3.Connection, secret: bytes, token: str | None, now: float | None = None
 ) -> str | None:
-    """The signed-in email, or None for a missing, forged, expired or revoked session."""
+    """The signed-in email, or None for a missing, forged, idle-expired, too-old or revoked session.
+    A valid request counts as activity and keeps the idle clock from running out."""
     if not token or "." not in token:
         return None
-    payload, _, sig = token.partition(".")
-    expected = hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(sig, expected):
+    sid, _, sig = token.partition(".")
+    if not hmac.compare_digest(sig, _sign(secret, sid)):
         return None
-    try:
-        email, expires, tag = _unb64(payload).decode().split("|")
-        if int(expires) < (now if now is not None else time.time()):
-            return None
-    except (ValueError, UnicodeDecodeError):
+    now = now if now is not None else time.time()
+    row = conn.execute("SELECT email, created, last_seen FROM sessions WHERE id = ?", (sid,)).fetchone()
+    if row is None:
         return None
-    row = conn.execute("SELECT password_hash FROM users WHERE email = ?", (email,)).fetchone()
-    if row is None or not hmac.compare_digest(_tag(row[0]), tag):
+    email, created, last_seen = row
+    if now - last_seen > idle_seconds() or now - created > max_seconds() or conn.execute(
+        "SELECT 1 FROM users WHERE email = ?", (email,)
+    ).fetchone() is None:
+        conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+        conn.commit()
         return None
+    if now - last_seen >= TOUCH_EVERY_SECONDS:
+        conn.execute("UPDATE sessions SET last_seen = ? WHERE id = ?", (now, sid))
+        conn.commit()
     return email
 
 
@@ -308,14 +338,15 @@ async def login_submit(request: Request, conn: sqlite3.Connection = Depends(get_
     response = RedirectResponse(target, status_code=303)
     secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
     response.set_cookie(
-        COOKIE_NAME, make_token(request.app.state.session_secret, email, row[0]),
-        max_age=SESSION_SECONDS, httponly=True, samesite="lax", secure=secure, path="/",
+        COOKIE_NAME, make_token(conn, request.app.state.session_secret, email),
+        max_age=int(max_seconds()), httponly=True, samesite="lax", secure=secure, path="/",
     )
     return response
 
 
 @router.api_route("/logout", methods=["GET", "POST"])
-def logout() -> Response:
+def logout(request: Request, conn: sqlite3.Connection = Depends(get_db)) -> Response:
+    end_session(conn, request.app.state.session_secret, request.cookies.get(COOKIE_NAME))
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(COOKIE_NAME, path="/")
     return response
