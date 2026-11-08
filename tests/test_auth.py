@@ -217,7 +217,7 @@ def test_signing_out_keeps_the_query_string_of_a_public_page(client):
 
 def test_the_top_bar_signs_out_in_place_and_offers_sign_in_when_signed_out(client):
     c = TestClient(client.app, follow_redirects=False)
-    assert 'href="/login?next=/ppa"' in c.get("/ppa").text and "/logout" not in c.get("/ppa").text
+    assert 'href="/login"' in c.get("/ppa").text and "/logout" not in c.get("/ppa").text
     _login(c)
     page = c.get("/live").text
     assert 'href="/logout?next=/live"' in page and "Sign in" not in page

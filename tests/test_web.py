@@ -286,13 +286,33 @@ def test_participant_detail_api_handles_multiple_p_params(tmp_path):
     assert data["Alpha Energy"]["eac"]["total_cleared_mw"] == 10.0
 
 
-def test_index_redirects_to_bess(tmp_path):
+def test_index_falls_back_to_bess_when_no_report_built(tmp_path):
     conn = connect(tmp_path / "test.db")
     conn.close()
     client = _client(tmp_path / "test.db")
     r = client.get("/", follow_redirects=False)
     assert r.status_code in (302, 307)
     assert r.headers["location"] == "/bess"
+
+
+def test_index_opens_latest_gb_power_weekly(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    upsert_report(conn, date(2026, 10, 25), "{}", "{}", "", published=True)
+    upsert_report(conn, date(2026, 11, 1), "{}", "{}", "", published=True)
+    conn.close()
+    client = _client(tmp_path / "test.db")
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code in (302, 307)
+    assert r.headers["location"] == "/gbpw/2026-11-01"
+
+
+def test_weekly_report_has_sign_in_link_that_lands_on_the_kpi_tool(tmp_path):
+    conn = connect(tmp_path / "test.db")
+    _seed_gbpw_report(conn)
+    conn.close()
+    page = _client(tmp_path / "test.db").get(f"/gbpw/{WEEK_ENDING.isoformat()}").text
+    # A plain /login, with no ?next=, so signing in goes to the default: the Portfolio Risk KPI tool.
+    assert 'href="/login"' in page and "Sign in" in page
 
 
 def test_live_market_page_empty_state_with_no_data(tmp_path):

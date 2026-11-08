@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import RedirectResponse
 
-from ..storage import DEFAULT_DB_PATH
+from ..storage import DEFAULT_DB_PATH, latest_report_week
 from . import auth, routes_admin, routes_bess, routes_forecasts, routes_gbpw, routes_live, routes_ppa, routes_ppa_pricing
 from .assets import NoCacheStaticFiles
 from .background_refresh import start_background_refresh
@@ -62,8 +63,10 @@ def create_app(db_path: Path = DEFAULT_DB_PATH) -> FastAPI:
     app.state.background_refresh_stop = start_background_refresh(db_path)
 
     @app.get("/")
-    def index():
-        return RedirectResponse(url="/bess")
+    def index(db: sqlite3.Connection = Depends(get_db)):
+        # The front door is the latest GB Power Weekly report; BESS only if none has been built yet.
+        week = latest_report_week(db)
+        return RedirectResponse(url=f"/gbpw/{week.isoformat()}" if week else "/bess")
 
     return app
 

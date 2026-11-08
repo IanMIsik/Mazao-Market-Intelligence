@@ -49,6 +49,7 @@ from ..render.render import render_week
 from ..settlement import most_recent_sunday
 from ..storage import get_report, latest_report_week, list_report_weeks
 from .assets import make_templates
+from .auth import session_context
 from .deps import get_db
 
 router = APIRouter()
@@ -99,7 +100,12 @@ _WEB_NAV_CSS = """
 """
 
 
-def _week_nav_bar(weeks: list[dict], current: date) -> str:
+def _week_nav_bar(weeks: list[dict], current: date, user: str | None = None) -> str:
+    # Signing in lands on the Portfolio Risk KPI tool; signing out returns to this same report.
+    if user:
+        account = f'<a class="webnav-newlink" href="/logout?next=/gbpw/{current.isoformat()}">Sign out</a>'
+    else:
+        account = '<a class="webnav-newlink" href="/login">Sign in</a>'
     options = []
     for w in weeks:
         label = w["week_ending"].strftime("Week ending %a %d %b %Y")
@@ -130,14 +136,15 @@ def _week_nav_bar(weeks: list[dict], current: date) -> str:
     <div class="webnav-tools">
       <a class="webnav-newlink" href="/gbpw/new">+ Build report for another week</a>
       <button class="webnav-pdfbtn" type="button" onclick="window.print()">Download PDF</button>{picker}
+      {account}
     </div>
   </div>
 </div>
 """
 
 
-def _with_web_nav(html: str, weeks: list[dict], current: date) -> str:
-    return html.replace("<body>", "<body>" + _week_nav_bar(weeks, current), 1)
+def _with_web_nav(html: str, weeks: list[dict], current: date, user: str | None = None) -> str:
+    return html.replace("<body>", "<body>" + _week_nav_bar(weeks, current, user), 1)
 
 
 @router.get("/gbpw")
@@ -211,7 +218,7 @@ def build_report_route(request: Request, week_ending: str, db: sqlite3.Connectio
 
 
 @router.get("/gbpw/{week_ending}")
-def weekly(week_ending: date, db: sqlite3.Connection = Depends(get_db)):
+def weekly(request: Request, week_ending: date, db: sqlite3.Connection = Depends(get_db)):
     report = get_report(db, week_ending)
     if report is None:
         raise HTTPException(
@@ -225,4 +232,4 @@ def weekly(week_ending: date, db: sqlite3.Connection = Depends(get_db)):
         datetime.fromisoformat(report["built_at"]),
     )
     weeks = list_report_weeks(db)
-    return HTMLResponse(content=_with_web_nav(html, weeks, week_ending))
+    return HTMLResponse(content=_with_web_nav(html, weeks, week_ending, session_context(request)["auth_user"]))
