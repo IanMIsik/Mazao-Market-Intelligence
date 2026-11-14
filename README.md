@@ -241,7 +241,7 @@ collected prices cannot be rebuilt from the seed. After a deploy, restart it wit
 A watchdog thread (`web/alerts.py`) emails when something is wrong: the 5-minute refresh has not completed for
 20 minutes (hung or failing), generation data is over 90 minutes old, last week's report is still unpublished 24 hours
 after it was due, free disk is under 1.5 GB, the Portfolio Risk KPI container has not answered for 5 minutes, or the
-KPI tool's daily 19:00 Purely Energy price collection did not succeed. One email when an issue starts, a reminder
+KPI tool's daily 19:00 forward-price collection did not succeed. One email when an issue starts, a reminder
 every 6 hours while it lasts, and one "resolved" email. It runs in its own thread so it still fires when the refresh
 itself is hung.
 

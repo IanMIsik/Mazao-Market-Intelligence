@@ -122,7 +122,7 @@ def test_without_configuration_nothing_is_sent(monkeypatch):
 # ---- Portfolio Risk KPI tool checks -------------------------------------------------
 
 def _status(last_ok, enabled=True, result="ok: 0 new or changed"):
-    return {"scheduler": {"enabled": enabled, "jobs": [{"job": "purely", "last_ok": last_ok, "last_result": result}]}}
+    return {"scheduler": {"enabled": enabled, "jobs": [{"job": "forward-prices", "last_ok": last_ok, "last_result": result}]}}
 
 
 @pytest.fixture
@@ -205,3 +205,29 @@ def test_the_test_alert_command_sends_when_configured(monkeypatch, tmp_path, cap
         cli.main(["test-alert", "--db", str(tmp_path / "t.db")])
     assert exit_info.value.code == 0 and sent == ["[Mazao] Test alert"]
     assert "Test email sent" in capsys.readouterr().out
+
+
+def test_the_old_job_name_still_counts_until_the_new_one_has_run(kpi):
+    """A KPI container that has not been rebuilt yet still reports the collection as "purely"."""
+    now = datetime(2026, 11, 5, 23, 0, tzinfo=timezone.utc)
+    old = {"scheduler": {"enabled": True, "jobs": [{"job": "purely", "last_ok": "2026-11-05T19:05:00Z", "last_result": "ok"}]}}
+    assert kpi("http://risk/", now, fetch=lambda u: old) == {}
+    both = {"scheduler": {"enabled": True, "jobs": [
+        {"job": "purely", "last_ok": "2026-11-05T19:05:00Z", "last_result": "ok"},
+        {"job": "forward-prices", "last_ok": "2026-11-03T19:05:00Z", "last_result": "rejected: feed changed"}]}}
+    assert "kpi_prices_missed" in kpi("http://risk/", now, fetch=lambda u: both)   # the new job is the one that counts
+
+
+def test_the_message_no_longer_blames_purely_and_says_how_to_fill_gaps(kpi):
+    now = datetime(2026, 11, 5, 23, 0, tzinfo=timezone.utc)
+    msg = kpi("http://risk/", now, fetch=lambda u: _status("2026-11-04T19:05:00Z", result="rejected: feed changed"))["kpi_prices_missed"]
+    assert "Purely" not in msg and "forward-price collection" in msg and "fetch-prices --since" in msg
+
+
+def test_kpi_emails_point_at_the_risk_container_logs():
+    sent = []
+    a = alerts.Alerter(send=lambda subject, body: sent.append((subject, body)) or True)
+    a.process({"kpi_prices_missed": "x", "refresh_stale": "y"}, NOW)
+    bodies = {s.split(": ")[1]: b for s, b in sent}
+    assert "--profile risk logs --since 1h risk" in bodies["kpi_prices_missed"]
+    assert bodies["refresh_stale"].endswith("sudo docker compose logs --since 1h gbpw")

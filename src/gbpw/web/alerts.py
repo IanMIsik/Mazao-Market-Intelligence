@@ -9,7 +9,7 @@ What it watches (each is an "issue" with a key):
   weekly_missing last week's GB Power Weekly report is still unpublished 24h after it was due
   disk_low       free disk under 1.5 GB (the server filled up once already)
   kpi_down       the Portfolio Risk KPI container has not answered for 5 minutes (KPI_STATUS_URL)
-  kpi_prices_missed  the KPI tool's daily Purely Energy price collection missed its 19:00 UK run
+  kpi_prices_missed  the KPI tool's daily forward-price collection missed its 19:00 UK run
 
 Per issue: one email when it starts, a reminder every 6 hours while it lasts, one "resolved"
 email when it clears. Nothing is sent while an issue stays quiet.
@@ -53,6 +53,7 @@ DISK_LOW_BYTES = int(1.5 * 1024**3)
 REMINDER_EVERY = timedelta(hours=6)
 KPI_DOWN_AFTER = timedelta(minutes=5)   # a rebuild of the KPI container takes about a minute
 KPI_RUN_GRACE = timedelta(hours=3)      # the daily collection runs after 19:00 UK; allow time before alarming
+KPI_PRICES_JOB = "forward-prices"         # the KPI scheduler job that collects the daily forward prices
 
 _STARTED = datetime.now(timezone.utc)
 
@@ -201,17 +202,19 @@ def check_kpi(url: str | None, now: datetime, fetch=_fetch_kpi_status) -> dict[s
     scheduler = status.get("scheduler") or {}
     expected = _last_expected_collection(now)
     if scheduler.get("enabled") and expected:
-        job = next((j for j in scheduler.get("jobs", []) if j.get("job") == "purely"), None)
+        jobs = {j.get("job"): j for j in scheduler.get("jobs", [])}
+        # The collection used to be the "purely" job; the source changed in Nov 2026 and the job was renamed.
+        job = jobs.get(KPI_PRICES_JOB) or jobs.get("purely")
         last_ok = None
         if job and job.get("last_ok"):
             last_ok = datetime.fromisoformat(job["last_ok"].replace("Z", "+00:00"))
         if last_ok is None or last_ok < expected:
             issues["kpi_prices_missed"] = (
-                f"The Portfolio Risk KPI tool's daily Purely Energy price collection has not succeeded since "
-                f"{last_ok:%a %d %b %H:%M} UTC" if last_ok else "The Portfolio Risk KPI tool's daily Purely Energy price collection has never succeeded"
+                f"The Portfolio Risk KPI tool's daily forward-price collection has not succeeded since "
+                f"{last_ok:%a %d %b %H:%M} UTC" if last_ok else "The Portfolio Risk KPI tool's daily forward-price collection has never succeeded"
             ) + f" (it was due after {expected:%a %d %b} 19:00 UK time)." + (
                 f" Last result: {job.get('last_result')}." if job and job.get("last_result") else ""
-            ) + " Purely Energy only shows the last two closes, so prices can be lost if this stays broken."
+            ) + " Charts and budget caps will be out of date until it is fixed. Missed days can be filled in afterwards"                 " (python -m app.cli fetch-prices --since <date> in the risk container), as long as the source still has them."
     return issues
 
 
@@ -229,24 +232,27 @@ class Alerter:
             seen = self._open.get(key)
             if seen is None:
                 logger.error("ALERT %s: %s", key, message)
-                self._send(f"[Mazao] ISSUE: {key}", self._body(message, now))
+                self._send(f"[Mazao] ISSUE: {key}", self._body(message, now, key=key))
                 self._open[key] = (message, now)
             elif now - seen[1] >= REMINDER_EVERY:
                 logger.error("ALERT (still open) %s: %s", key, message)
-                self._send(f"[Mazao] STILL OPEN: {key}", self._body(message, now, reminder=True))
+                self._send(f"[Mazao] STILL OPEN: {key}", self._body(message, now, reminder=True, key=key))
                 self._open[key] = (message, now)
         for key in [k for k in self._open if k not in issues]:
             logger.warning("ALERT %s resolved", key)
-            self._send(f"[Mazao] RESOLVED: {key}", self._body(f"This issue has cleared. It was: {self._open[key][0]}", now))
+            self._send(f"[Mazao] RESOLVED: {key}", self._body(f"This issue has cleared. It was: {self._open[key][0]}", now, key=key))
             del self._open[key]
 
-    def _body(self, message: str, now: datetime, reminder: bool = False) -> str:
+    def _body(self, message: str, now: datetime, reminder: bool = False, key: str = "") -> str:
+        # The KPI tool runs in its own container, so its issues need that container's logs.
+        logs = ("sudo docker compose --profile risk logs --since 1h risk" if key.startswith("kpi_")
+                else "sudo docker compose logs --since 1h gbpw")
         return (
             f"{message}\n\n"
             f"{'Reminder: this has not cleared yet.' + chr(10) if reminder else ''}"
             f"Server: {self._host}\nTime: {now:%Y-%m-%d %H:%M:%S} UTC\n"
             "Site: https://mazao-intelligence.duckdns.org\n"
-            "Logs: sudo docker compose logs --since 1h gbpw"
+            f"Logs: {logs}"
         )
 
 
