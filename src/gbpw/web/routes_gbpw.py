@@ -61,7 +61,9 @@ _WEB_NAV_CSS = """
 <style>
   @media print { .webnav-appnav { display:none; } }
   .webnav-appnav { background:#10294A; font:13.5px -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; }
-  .webnav-appnav .webnav-wrap { display:flex; align-items:center; gap:28px; padding:0 28px; max-width:1060px; margin:0 auto; }
+  /* flex-wrap: brand + 5 links + the tools (new-report link, PDF, week picker, sign in/out) are wider than the page
+     below roughly 1400px, and used to push the last item (Sign in) off the right edge. They now flow onto a second row. */
+  .webnav-appnav .webnav-wrap { display:flex; flex-wrap:wrap; align-items:center; gap:0 28px; padding:0 28px; max-width:1060px; margin:0 auto; }
   .webnav-appnav .webnav-brand { font-weight:700; color:#fff; letter-spacing:.01em; font-size:15px; padding:14px 0; }
   .webnav-appnav .webnav-brand span { font-weight:400; color:#B9C6DA; }
   .webnav-appnav nav { display:flex; gap:2px; }
@@ -69,13 +71,14 @@ _WEB_NAV_CSS = """
     border-bottom:2px solid transparent; }
   .webnav-appnav nav a.on { color:#fff; border-bottom-color:#B04A39; font-weight:600; }
   .webnav-appnav nav a:not(.on):hover { color:#fff; }
-  .webnav-tools { margin-left:auto; display:flex; align-items:center; gap:14px; }
+  .webnav-tools { margin-left:auto; display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:8px 14px; padding:6px 0; }
   .webnav-weekpick { display:flex; align-items:center; gap:8px; }
   .webnav-weekpick label { color:#8FA0BC; font-size:12px; }
   .webnav-weekpick select { background:#16305A; color:#fff; border:1px solid #2B4B73; border-radius:4px;
     font:13px -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; padding:5px 8px; }
   .webnav-newlink { color:#B9C6DA; text-decoration:none; font-size:13px; white-space:nowrap; }
   .webnav-newlink:hover { color:#fff; }
+  .webnav-appnav a.webnav-newlink { flex-shrink:0; }
   .webnav-pdfbtn { background:#16305A; color:#fff; border:1px solid #2B4B73; border-radius:4px;
     font:13px -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; padding:5px 10px; cursor:pointer; }
   .webnav-pdfbtn:hover { background:#2B4B73; }
@@ -89,12 +92,12 @@ _WEB_NAV_CSS = """
      see the module docstring) -- stack brand above nav, drop the
      decorative subtitle, let nav and the tools row each wrap. */
   @media (max-width:600px) {
-    .webnav-appnav .webnav-wrap { flex-direction:column; align-items:flex-start; gap:0; padding:10px 16px; }
+    .webnav-appnav .webnav-wrap { flex-direction:column; flex-wrap:nowrap; align-items:flex-start; gap:0; padding:10px 16px; }
     .webnav-appnav .webnav-brand { padding:4px 0; }
     .webnav-appnav .webnav-brand span { display:none; }
     .webnav-appnav nav { flex-wrap:wrap; gap:0 4px; width:100%; }
     .webnav-appnav nav a { padding:8px 8px; font-size:12.5px; }
-    .webnav-tools { margin-left:0; width:100%; flex-wrap:wrap; gap:8px 14px; padding:8px 0 4px; }
+    .webnav-tools { margin-left:0; width:100%; flex-wrap:wrap; justify-content:flex-start; gap:8px 14px; padding:8px 0 4px; }
   }
 </style>
 """

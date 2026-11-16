@@ -315,6 +315,20 @@ def test_weekly_report_has_sign_in_link_that_lands_on_the_kpi_tool(tmp_path):
     assert 'href="/login"' in page and "Sign in" in page
 
 
+def test_report_top_bar_wraps_so_sign_in_cannot_be_pushed_off_screen(tmp_path):
+    """Brand + 5 tabs + tools (new report, PDF, week picker, sign in) are wider than most screens: the bar must flow
+    onto a second row instead of overflowing. (Seen live: Sign in sat at x=1134 on a 900px screen.)"""
+    conn = connect(tmp_path / "test.db")
+    _seed_gbpw_report(conn)
+    conn.close()
+    page = _client(tmp_path / "test.db").get(f"/gbpw/{WEEK_ENDING.isoformat()}").text
+    import re
+    wrap = re.search(r"\.webnav-wrap \{([^}]*)\}", page).group(1)
+    tools = re.search(r"\.webnav-tools \{([^}]*)\}", page).group(1)
+    assert "flex-wrap:wrap" in wrap and "flex-wrap:wrap" in tools
+    assert 'class="webnav-newlink" href="/login"' in page
+
+
 def test_live_market_page_empty_state_with_no_data(tmp_path):
     conn = connect(tmp_path / "test.db")
     conn.close()
