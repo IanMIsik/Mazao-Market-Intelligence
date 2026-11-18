@@ -9,7 +9,7 @@ What it watches (each is an "issue" with a key):
   weekly_missing last week's GB Power Weekly report is still unpublished 24h after it was due
   disk_low       free disk under 1.5 GB (the server filled up once already)
   kpi_down       the Portfolio Risk KPI container has not answered for 5 minutes (KPI_STATUS_URL)
-  kpi_prices_missed  the KPI tool's daily forward-price collection missed its 19:00 UK run
+  kpi_prices_missed  the KPI tool's daily forward-price collection has not completed by its own deadline
 
 Per issue: one email when it starts, a reminder every 6 hours while it lasts, one "resolved"
 email when it clears. Nothing is sent while an issue stays quiet.
@@ -34,7 +34,7 @@ import smtplib
 import socket
 import threading
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -54,6 +54,7 @@ REMINDER_EVERY = timedelta(hours=6)
 KPI_DOWN_AFTER = timedelta(minutes=5)   # a rebuild of the KPI container takes about a minute
 KPI_RUN_GRACE = timedelta(hours=3)      # the daily collection runs after 19:00 UK; allow time before alarming
 KPI_PRICES_JOB = "forward-prices"         # the KPI scheduler job that collects the daily forward prices
+KPI_FAIL_GRACE = timedelta(hours=1)     # a collection that is being rejected/erroring is reported this long after its trigger
 
 _STARTED = datetime.now(timezone.utc)
 
@@ -184,6 +185,31 @@ def _last_expected_collection(now: datetime) -> datetime | None:
     return None
 
 
+def _utc(ts: str | None) -> datetime | None:
+    return datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else None
+
+
+def _prices_overdue(job: dict, now: datetime) -> str | None:
+    """The alert text if the price collection has not completed for its latest trigger, by its own deadline."""
+    trig, deadline, complete = _utc(job.get("last_trigger")), _utc(job.get("deadline")), _utc(job.get("last_complete"))
+    if trig is None or deadline is None or (complete is not None and complete >= trig):
+        return None
+    result = job.get("last_result") or ""
+    failing = result.startswith(("rejected:", "error:"))
+    if not (now >= deadline or (failing and now >= trig + KPI_FAIL_GRACE)):
+        return None
+    since = f"has not finished since {complete:%a %d %b %H:%M} UTC" if complete else "has never finished"
+    due_for = job.get("due_for")
+    return (
+        f"The Portfolio Risk KPI tool's daily forward-price collection {since}: the close of "
+        f"{date.fromisoformat(due_for):%a %d %b} was due from {trig:%a %d %b %H:%M} UTC" if due_for else
+        f"The Portfolio Risk KPI tool's daily forward-price collection {since}: it was due from {trig:%a %d %b %H:%M} UTC"
+    ) + "." + (f" Last result: {result}." if result else "") + (
+        " Charts and budget caps will be out of date until it is fixed. Missed days can be filled in afterwards"
+        " (python -m app.cli fetch-prices --since <date> in the risk container), as long as the source still has them."
+    )
+
+
 def check_kpi(url: str | None, now: datetime, fetch=_fetch_kpi_status) -> dict[str, str]:
     """Issues with the Portfolio Risk KPI tool, read from its own /api/prices/status."""
     global _kpi_first_failure
@@ -200,11 +226,16 @@ def check_kpi(url: str | None, now: datetime, fetch=_fetch_kpi_status) -> dict[s
 
     issues: dict[str, str] = {}
     scheduler = status.get("scheduler") or {}
+    jobs = {j.get("job"): j for j in scheduler.get("jobs", [])}
+    # The collection used to be the "purely" job; the source changed in Nov 2026 and the job was renamed.
+    job = jobs.get(KPI_PRICES_JOB) or jobs.get("purely")
     expected = _last_expected_collection(now)
-    if scheduler.get("enabled") and expected:
-        jobs = {j.get("job"): j for j in scheduler.get("jobs", [])}
-        # The collection used to be the "purely" job; the source changed in Nov 2026 and the job was renamed.
-        job = jobs.get(KPI_PRICES_JOB) or jobs.get("purely")
+    if scheduler.get("enabled") and job and job.get("last_trigger"):
+        # The KPI scheduler reports its own schedule (the close is collected the next morning), so we need not guess it.
+        message = _prices_overdue(job, now)
+        if message:
+            issues["kpi_prices_missed"] = message
+    elif scheduler.get("enabled") and expected:
         last_ok = None
         if job and job.get("last_ok"):
             last_ok = datetime.fromisoformat(job["last_ok"].replace("Z", "+00:00"))

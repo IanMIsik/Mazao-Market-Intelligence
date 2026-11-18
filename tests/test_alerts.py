@@ -231,3 +231,48 @@ def test_kpi_emails_point_at_the_risk_container_logs():
     bodies = {s.split(": ")[1]: b for s, b in sent}
     assert "--profile risk logs --since 1h risk" in bodies["kpi_prices_missed"]
     assert bodies["refresh_stale"].endswith("sudo docker compose logs --since 1h gbpw")
+
+
+# ---- the KPI scheduler reports its own schedule (the close is collected the next morning) ---------------------------
+
+def _sched(last_complete, now_trigger="2026-11-18T06:00:00Z", deadline="2026-11-18T14:00:00Z", result="ok: 7 new or changed",
+           enabled=True, due_for="2026-11-17"):
+    job = {"job": "forward-prices", "last_ok": last_complete, "last_complete": last_complete, "last_result": result,
+           "last_trigger": now_trigger, "deadline": deadline, "due_for": due_for}
+    return {"scheduler": {"enabled": enabled, "jobs": [job]}}
+
+
+def _at(hour, minute=0):
+    return datetime(2026, 11, 18, hour, minute, tzinfo=timezone.utc)
+
+
+def test_a_collection_completed_since_its_trigger_is_fine_all_day_including_the_evening(kpi):
+    done = _sched("2026-11-18T07:10:00Z")
+    for hour in (7, 12, 19, 22, 23):
+        assert kpi("http://risk/", _at(hour, 30), fetch=lambda u: done) == {}     # no false alarm at 22:00 any more
+
+
+def test_waiting_for_the_close_is_quiet_until_the_deadline(kpi):
+    waiting = _sched("2026-11-17T07:10:00Z", result="waiting: 0 new or changed; the close for 2026-11-17 is not published yet")
+    assert kpi("http://risk/", _at(10), fetch=lambda u: waiting) == {}
+    assert kpi("http://risk/", _at(13, 59), fetch=lambda u: waiting) == {}
+    issues = kpi("http://risk/", _at(14, 0), fetch=lambda u: waiting)               # it has stopped looking and has nothing
+    assert "kpi_prices_missed" in issues and "Tue 17 Nov" in issues["kpi_prices_missed"] and "fetch-prices --since" in issues["kpi_prices_missed"]
+
+
+def test_a_feed_that_is_being_rejected_is_reported_an_hour_after_the_trigger_not_at_the_deadline(kpi):
+    bad = _sched("2026-11-17T07:10:00Z", result="rejected: Expected commodity UKB but the feed says 'GAS'.")
+    assert kpi("http://risk/", _at(6, 59), fetch=lambda u: bad) == {}
+    msg = kpi("http://risk/", _at(7, 0), fetch=lambda u: bad)["kpi_prices_missed"]
+    assert "rejected: Expected commodity UKB" in msg and "Tue 17 Nov 07:10 UTC" in msg
+
+
+def test_a_never_completed_job_and_a_disabled_scheduler(kpi):
+    assert "has never finished" in kpi("http://risk/", _at(15), fetch=lambda u: _sched(None, result="error: boom"))["kpi_prices_missed"]
+    assert kpi("http://risk/", _at(15), fetch=lambda u: _sched(None, enabled=False)) == {}
+
+
+def test_a_complete_run_from_before_the_trigger_does_not_count(kpi):
+    yesterday = _sched("2026-11-17T07:10:00Z")                                     # finished yesterday morning, not today
+    assert kpi("http://risk/", _at(8), fetch=lambda u: yesterday) == {}             # still inside the window
+    assert "kpi_prices_missed" in kpi("http://risk/", _at(14, 5), fetch=lambda u: yesterday)
